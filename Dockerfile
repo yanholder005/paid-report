@@ -1,10 +1,12 @@
-# Use official Python image
-FROM python:3.10-slim
+# Lock to the stable Bullseye release to guarantee package names match
+FROM python:3.10-slim-bullseye
 
-# Install system graphics libraries required for WeasyPrint PDF generation
+# Install all C-libraries and graphics engines required by WeasyPrint
 RUN apt-get update && apt-get install -y \
+    build-essential \
+    libcairo2 \
     libpango-1.0-0 \
-    libpangoft2-1.0-0 \
+    libpangocairo-1.0-0 \
     libgdk-pixbuf2.0-0 \
     libffi-dev \
     shared-mime-info \
