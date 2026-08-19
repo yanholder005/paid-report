@@ -179,13 +179,14 @@ async def process_paid_report(data: PaidReportRequest):
             <style>
                 @import url('https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,600;12..96,700&family=Figtree:wght@400;600&display=swap');
                 
-                /* Reset default browser margins to fix the cover gap */
+                /* Reset default browser margins */
                 html, body {{
                     margin: 0;
                     padding: 0;
+                    background-color: #FDFBF7;
                 }}
                 
-                /* Standard pages with margins, beige background, and page numbers */
+                /* 1. Standard pages (Text): Margins and Page Numbers */
                 @page {{ 
                     size: A4; 
                     margin: 2.5cm 2.2cm; 
@@ -198,10 +199,13 @@ async def process_paid_report(data: PaidReportRequest):
                     }}
                 }}
                 
-                /* Cover page: zero margins, which naturally hides the page number */
+                /* 2. Named page exclusively for the cover (Zero margins, No page numbers) */
                 @page cover {{ 
                     margin: 0; 
                     background-color: #FDFBF7;
+                    @bottom-center {{
+                        content: none;
+                    }}
                 }}
                 
                 body {{ 
@@ -211,16 +215,13 @@ async def process_paid_report(data: PaidReportRequest):
                     line-height: 1.8; 
                 }}
                 
-                /* Cover container absolutely locked to the edges */
+                /* 3. Cover Container: Forces page break and uses the cover @page rules */
                 .cover-container {{ 
                     page: cover; 
-                    position: absolute;
-                    top: 0;
-                    left: 0;
-                    width: 100%; 
-                    height: 100%; 
+                    width: 100vw; 
+                    height: 100vh; 
                     display: block; 
-                    break-after: page; 
+                    page-break-after: always; 
                     overflow: hidden;
                 }}
                 
@@ -229,6 +230,11 @@ async def process_paid_report(data: PaidReportRequest):
                     height: 100%;
                     object-fit: cover;
                     display: block;
+                }}
+                
+                /* 4. Text Content: Resets the page counter so this starts at "1" */
+                .content-page {{
+                    counter-reset: page 1;
                 }}
                 
                 h1, h2, h3 {{ 
