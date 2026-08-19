@@ -1,0 +1,13 @@
+fastapi
+uvicorn
+python-multipart
+pydantic
+kerykeion
+geopy
+timezonefinder
+gspread
+google-auth
+google-generativeai
+resend
+markdown
+weasyprint
