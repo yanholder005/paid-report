@@ -68,7 +68,6 @@ async def get_chart_data(name, year, month, day, hour, minute, city, nation):
     
     subject = await asyncio.to_thread(AstrologicalSubject, name, year, month, day, hour, minute, lng=location.longitude, lat=location.latitude, tz_str=tz_str, city=city)
     
-    # We map transits for exactly right now
     now_utc = datetime.datetime.utcnow()
     subject_transit = await asyncio.to_thread(AstrologicalSubject, "Transit", now_utc.year, now_utc.month, now_utc.day, now_utc.hour, now_utc.minute, lng=0.0, lat=51.5, tz_str="UTC", city="London")
 
@@ -111,7 +110,7 @@ async def get_chart_data(name, year, month, day, hour, minute, city, nation):
     return "\n".join(lines)
 
 async def process_paid_report(data: PaidReportRequest):
-    # The 15-Minute Premium Anticipation Delay
+    # THE 15-MINUTE PREMIUM ANTICIPATION DELAY
     await asyncio.sleep(900)
 
     try:
@@ -122,14 +121,46 @@ async def process_paid_report(data: PaidReportRequest):
         chart_data = await get_chart_data(data.name, year, month, day, hour, minute, data.city, data.nation)
 
         client = await asyncio.to_thread(get_gspread_client)
-        sheet = client.open_by_key(os.environ.get("GOOGLE_SHEET_ID")).worksheet("PaidReports")
+        paid_sheet = client.open_by_key(os.environ.get("GOOGLE_SHEET_ID")).worksheet("PaidReports")
         settings = client.open_by_key(os.environ.get("GOOGLE_SHEET_ID")).worksheet("Settings")
         
         master_prompt = settings.acell('B1').value
-
         context_string = f"Deep Dive Context from User: {data.question}\n"
+
+        # --- THE CROSS-REFERENCE BACKWARD LOOKUP ---
+        # Searches Sheet1 for their Free Report history so the AI has memory
+        try:
+            free_sheet = client.open_by_key(os.environ.get("GOOGLE_SHEET_ID")).worksheet("Sheet1")
+            all_values = free_sheet.get_all_values()
+            
+            # Search backward to find their most recent submission
+            past_record = None
+            for row in reversed(all_values):
+                # Assuming Email is column F (Index 5)
+                if len(row) > 5 and row[5].strip().lower() == data.email.strip().lower():
+                    past_record = row
+                    break
+            
+            if past_record:
+                # Assuming Column E (4) is Question, Column G (6) is Categories, Column I (8) is Report
+                orig_q = past_record[4] if len(past_record) > 4 else ''
+                orig_cats = past_record[6] if len(past_record) > 6 else ''
+                orig_report = past_record[8] if len(past_record) > 8 else ''
+                
+                if orig_report:
+                    context_string += f"\n--- MEMORY: PREVIOUS FREE REPORT CONTEXT ---\n"
+                    context_string += "You previously gave this user a short free reading. You MUST ensure this new paid deep-dive expands upon, validates, and aligns with what you already told them in the free report below.\n\n"
+                    context_string += f"Original Focus Area Selected: {orig_cats}\n"
+                    context_string += f"Original Situation: {orig_q}\n\n"
+                    context_string += f"The Free Report They Already Read:\n{orig_report}\n"
+                    context_string += f"--- END MEMORY ---\n\n"
+        except Exception as e:
+            print(f"Warning: Could not fetch past records for cross-reference: {e}")
+            pass
+
+        # --- BUMP LOGIC ---
         if data.bump:
-            context_string += "\nCRITICAL RULE: The user purchased the 6-Month Forecast. You MUST add a final section titled '## YOUR NEXT 6 MONTHS' and provide specific chronological forecasts based on transits.\n"
+            context_string += "\nCRITICAL RULE: The user purchased the 6-Month Forecast Order Bump. You MUST add a final section titled '## YOUR NEXT 6 MONTHS' and provide specific chronological forecasts based on transits.\n"
 
         user_prompt = f"Name: {data.name}\nDOB: {formatted_dob}\nTime: {data.time}\nLocation: {data.city}\n\n{context_string}\n\nCHART DATA:\n{chart_data}"
 
@@ -138,9 +169,9 @@ async def process_paid_report(data: PaidReportRequest):
         response = await model.generate_content_async(f"{master_prompt}\n\n{user_prompt}")
         report_markdown = response.text
 
-        # Log to Google Sheets
+        # Log to PaidReports Google Sheet
         row = [data.name, data.email, data.date, data.time, f"{data.city}, {data.nation}", data.question, "Yes" if data.bump else "No", datetime.datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")]
-        await asyncio.to_thread(sheet.append_row, row)
+        await asyncio.to_thread(paid_sheet.append_row, row)
 
         # Build PDF
         html_content = markdown.markdown(report_markdown)
@@ -179,7 +210,7 @@ async def process_paid_report(data: PaidReportRequest):
         
         pdf_file = HTML(string=pdf_html).write_pdf()
 
-        # Email PDF
+        # Email PDF via Resend
         resend.api_key = os.environ.get("RESEND_API_KEY")
         email_body = f"""
         <p>Hi {data.name},</p>
