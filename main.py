@@ -163,7 +163,7 @@ async def process_paid_report(data: PaidReportRequest):
         user_prompt = f"Name: {data.name}\nDOB: {formatted_dob}\nTime: {data.time}\nLocation: {data.city}\n\n{context_string}\n\nCHART DATA:\n{chart_data}"
 
         genai.configure(api_key=os.environ.get("GEMINI_API_KEY"))
-        model = genai.GenerativeModel("gemini-1.5-flash")
+        model = genai.GenerativeModel("gemini-3.1-pro-preview")
         response = await model.generate_content_async(f"{master_prompt}\n\n{user_prompt}")
         report_markdown = response.text
 
