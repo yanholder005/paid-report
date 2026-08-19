@@ -178,27 +178,67 @@ async def process_paid_report(data: PaidReportRequest):
         <head>
             <style>
                 @import url('https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,600;12..96,700&family=Figtree:wght@400;600&display=swap');
-                @page {{ size: A4; margin: 0; }}
-                @page :first {{ background: url('https://yanholder.com/assets/images/image03.jpg?v=84d19ef7') no-repeat center center; background-size: cover; }}
-                body {{ font-family: 'Figtree', sans-serif; background-color: #FDFBF7; color: #111; font-size: 14.5px; line-height: 1.8; }}
-                .cover-page {{ height: 100vh; width: 100vw; display: block; page-break-after: always; }}
-                .content-page {{ padding: 60px 80px; }}
-                h1, h2, h3 {{ font-family: 'Bricolage Grotesque', sans-serif; color: #000; margin-top: 30px; margin-bottom: 15px; }}
+                
+                /* Standard elegant margins for all text pages */
+                @page {{ 
+                    size: A4; 
+                    margin: 2.5cm 2.2cm; 
+                }}
+                
+                /* Special zero-margin rule exclusively for the cover */
+                @page cover {{ 
+                    margin: 0; 
+                    background: url('https://yanholder.com/assets/images/image03.jpg?v=84d19ef7') no-repeat center center; 
+                    background-size: cover; 
+                }}
+                
+                body {{ 
+                    font-family: 'Figtree', sans-serif; 
+                    background-color: #FDFBF7; 
+                    color: #111; 
+                    font-size: 14.5px; 
+                    line-height: 1.8; 
+                }}
+                
+                /* Assigns the cover page to use the zero-margin @page cover rules */
+                .cover-page {{ 
+                    page: cover; 
+                    height: 100vh; 
+                    width: 100vw; 
+                    display: block; 
+                    page-break-after: always; 
+                }}
+                
+                h1, h2, h3 {{ 
+                    font-family: 'Bricolage Grotesque', sans-serif; 
+                    color: #000; 
+                    margin-top: 35px; 
+                    margin-bottom: 15px; 
+                }}
+                
                 h2 {{ font-size: 22px; border-bottom: 1px solid #ddd; padding-bottom: 5px; }}
                 h3 {{ font-size: 18px; }}
-                p {{ margin-bottom: 15px; }}
-                strong {{ font-weight: 600; color: #000; }}
-                .header-box {{ text-align: left; margin-bottom: 40px; padding-bottom: 20px; border-bottom: 2px dashed #ccc; }}
-                .header-title {{ font-family: 'Bricolage Grotesque', sans-serif; font-size: 32px; font-weight: 700; }}
-                .header-sub {{ font-size: 12px; font-weight: 600; color: #555; text-transform: uppercase; letter-spacing: 1px; margin-top: 5px; }}
+                p {{ margin-bottom: 16px; text-align: justify; }}
+                strong {{ font-weight: 700; color: #000; }}
+                
+                .header-box {{ 
+                    text-align: left; 
+                    margin-bottom: 40px; 
+                    padding-bottom: 20px; 
+                    border-bottom: 2px dashed #ccc; 
+                }}
+                
+                .header-title {{ font-family: 'Bricolage Grotesque', sans-serif; font-size: 32px; font-weight: 700; line-height: 1.2; margin-bottom: 8px; }}
+                .header-sub {{ font-size: 13px; font-weight: 600; color: #555; text-transform: uppercase; letter-spacing: 1.5px; }}
             </style>
         </head>
         <body>
             <div class="cover-page"></div>
+            
             <div class="content-page">
                 <div class="header-box">
-                    <div class="header-title">{data.name}'s Astrological Blueprint</div>
-                    <div class="header-sub">Born: {formatted_dob} {data.time} • {data.city}</div>
+                    <div class="header-title">{data.name}'s Astrological<br>Blueprint</div>
+                    <div class="header-sub">BORN: {formatted_dob} {data.time} • {data.city}</div>
                 </div>
                 {html_content}
             </div>
