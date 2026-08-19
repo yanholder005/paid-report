@@ -124,25 +124,27 @@ async def process_paid_report(data: PaidReportRequest):
         paid_sheet = client.open_by_key(os.environ.get("GOOGLE_SHEET_ID")).worksheet("PaidReports")
         settings = client.open_by_key(os.environ.get("GOOGLE_SHEET_ID")).worksheet("Settings")
         
-        master_prompt = settings.acell('B1').value
+        # --- THE DYNAMIC PROMPT TOGGLE ---
+        # Grabs B2 if they bought the bump, otherwise grabs B1
+        if data.bump:
+            master_prompt = settings.acell('B2').value
+        else:
+            master_prompt = settings.acell('B1').value
+
         context_string = f"Deep Dive Context from User: {data.question}\n"
 
         # --- THE CROSS-REFERENCE BACKWARD LOOKUP ---
-        # Searches Sheet1 for their Free Report history so the AI has memory
         try:
             free_sheet = client.open_by_key(os.environ.get("GOOGLE_SHEET_ID")).worksheet("Sheet1")
             all_values = free_sheet.get_all_values()
             
-            # Search backward to find their most recent submission
             past_record = None
             for row in reversed(all_values):
-                # Assuming Email is column F (Index 5)
                 if len(row) > 5 and row[5].strip().lower() == data.email.strip().lower():
                     past_record = row
                     break
             
             if past_record:
-                # Assuming Column E (4) is Question, Column G (6) is Categories, Column I (8) is Report
                 orig_q = past_record[4] if len(past_record) > 4 else ''
                 orig_cats = past_record[6] if len(past_record) > 6 else ''
                 orig_report = past_record[8] if len(past_record) > 8 else ''
@@ -157,10 +159,6 @@ async def process_paid_report(data: PaidReportRequest):
         except Exception as e:
             print(f"Warning: Could not fetch past records for cross-reference: {e}")
             pass
-
-        # --- BUMP LOGIC ---
-        if data.bump:
-            context_string += "\nCRITICAL RULE: The user purchased the 6-Month Forecast Order Bump. You MUST add a final section titled '## YOUR NEXT 6 MONTHS' and provide specific chronological forecasts based on transits.\n"
 
         user_prompt = f"Name: {data.name}\nDOB: {formatted_dob}\nTime: {data.time}\nLocation: {data.city}\n\n{context_string}\n\nCHART DATA:\n{chart_data}"
 
