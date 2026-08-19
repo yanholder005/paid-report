@@ -179,34 +179,42 @@ async def process_paid_report(data: PaidReportRequest):
             <style>
                 @import url('https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,600;12..96,700&family=Figtree:wght@400;600&display=swap');
                 
-                /* Standard elegant margins for all text pages */
+                /* 1. Apply beige background to ALL pages, including the margins */
                 @page {{ 
                     size: A4; 
                     margin: 2.5cm 2.2cm; 
+                    background-color: #FDFBF7; 
                 }}
                 
-                /* Special zero-margin rule exclusively for the cover */
+                /* 2. Create a special named page for the cover with zero margins */
                 @page cover {{ 
                     margin: 0; 
-                    background: url('https://yanholder.com/assets/images/image03.jpg?v=84d19ef7') no-repeat center center; 
-                    background-size: cover; 
+                    background-color: #FDFBF7;
                 }}
                 
                 body {{ 
                     font-family: 'Figtree', sans-serif; 
-                    background-color: #FDFBF7; 
                     color: #111; 
                     font-size: 14.5px; 
                     line-height: 1.8; 
                 }}
                 
-                /* Assigns the cover page to use the zero-margin @page cover rules */
-                .cover-page {{ 
+                /* 3. Assign the cover container to the named cover page */
+                .cover-container {{ 
                     page: cover; 
                     height: 100vh; 
                     width: 100vw; 
                     display: block; 
-                    page-break-after: always; 
+                    break-after: page; 
+                    overflow: hidden;
+                }}
+                
+                /* 4. The bulletproof WeasyPrint image fix: an object-fit img tag */
+                .cover-container img {{
+                    width: 100%;
+                    height: 100%;
+                    object-fit: cover;
+                    display: block;
                 }}
                 
                 h1, h2, h3 {{ 
@@ -233,7 +241,10 @@ async def process_paid_report(data: PaidReportRequest):
             </style>
         </head>
         <body>
-            <div class="cover-page"></div>
+            <!-- The Bulletproof Cover Image Container -->
+            <div class="cover-container">
+                <img src="https://yanholder.com/assets/images/image03.jpg?v=84d19ef7" alt="Astrological Blueprint Cover" />
+            </div>
             
             <div class="content-page">
                 <div class="header-box">
