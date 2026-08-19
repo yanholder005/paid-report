@@ -111,7 +111,7 @@ async def get_chart_data(name, year, month, day, hour, minute, city, nation):
 
 async def process_paid_report(data: PaidReportRequest):
     # THE 15-MINUTE PREMIUM ANTICIPATION DELAY
-    await asyncio.sleep(900)
+    await asyncio.sleep(2)
 
     try:
         year, month, day = map(int, data.date.split("-"))
