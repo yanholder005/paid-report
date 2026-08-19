@@ -179,14 +179,26 @@ async def process_paid_report(data: PaidReportRequest):
             <style>
                 @import url('https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,600;12..96,700&family=Figtree:wght@400;600&display=swap');
                 
-                /* 1. Apply beige background to ALL pages, including the margins */
+                /* Reset default browser margins to fix the cover gap */
+                html, body {{
+                    margin: 0;
+                    padding: 0;
+                }}
+                
+                /* Standard pages with margins, beige background, and page numbers */
                 @page {{ 
                     size: A4; 
                     margin: 2.5cm 2.2cm; 
                     background-color: #FDFBF7; 
+                    @bottom-center {{
+                        content: counter(page);
+                        font-family: 'Figtree', sans-serif;
+                        font-size: 13px;
+                        color: rgba(17, 17, 17, 0.5);
+                    }}
                 }}
                 
-                /* 2. Create a special named page for the cover with zero margins */
+                /* Cover page: zero margins, which naturally hides the page number */
                 @page cover {{ 
                     margin: 0; 
                     background-color: #FDFBF7;
@@ -199,17 +211,19 @@ async def process_paid_report(data: PaidReportRequest):
                     line-height: 1.8; 
                 }}
                 
-                /* 3. Assign the cover container to the named cover page */
+                /* Cover container absolutely locked to the edges */
                 .cover-container {{ 
                     page: cover; 
-                    height: 100vh; 
-                    width: 100vw; 
+                    position: absolute;
+                    top: 0;
+                    left: 0;
+                    width: 100%; 
+                    height: 100%; 
                     display: block; 
                     break-after: page; 
                     overflow: hidden;
                 }}
                 
-                /* 4. The bulletproof WeasyPrint image fix: an object-fit img tag */
                 .cover-container img {{
                     width: 100%;
                     height: 100%;
