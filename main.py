@@ -144,7 +144,7 @@ async def get_chart_data(name, year, month, day, hour, minute, city, nation, bum
 
 async def process_paid_report(data: PaidReportRequest):
     # THE 15-MINUTE PREMIUM ANTICIPATION DELAY
-    await asyncio.sleep(2)
+    await asyncio.sleep(900)
 
     try:
         year, month, day = map(int, data.date.split("-"))
@@ -306,7 +306,7 @@ async def process_paid_report(data: PaidReportRequest):
         <body>
             <!-- The Bulletproof Cover Image Container -->
             <div class="cover-container">
-                <img src="https://yanholder.com/assets/images/image03.jpg?v=84d19ef7" alt="Astrological Blueprint Cover" />
+                <img src="https://yanholder.com/assets/images/image12.jpg?v=104f716e" alt="Astrological Blueprint Cover" />
             </div>
             
             <div class="content-page">
