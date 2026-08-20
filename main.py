@@ -118,6 +118,16 @@ async def process_paid_report(data: PaidReportRequest):
         hour, minute = map(int, data.time.split(":"))
         formatted_dob = datetime.date(year, month, day).strftime("%B %d, %Y")
 
+        # --- THE BULLETPROOF PROFECTION CALCULATOR ---
+        # Python does the exact math so the AI never hallucinates the year
+        now_date = datetime.datetime.utcnow()
+        age = now_date.year - year - ((now_date.month, now_date.day) < (month, day))
+        
+        prof_num = (age % 12) + 1
+        suffixes = {1: 'st', 2: 'nd', 3: 'rd'}
+        suffix = suffixes.get(prof_num if prof_num < 20 else prof_num % 10, 'th')
+        profection_house = f"{prof_num}{suffix} House"
+
         chart_data = await get_chart_data(data.name, year, month, day, hour, minute, data.city, data.nation)
 
         client = await asyncio.to_thread(get_gspread_client)
