@@ -170,7 +170,7 @@ async def process_paid_report(data: PaidReportRequest):
             print(f"Warning: Could not fetch past records for cross-reference: {e}")
             pass
 
-        user_prompt = f"Name: {data.name}\nDOB: {formatted_dob}\nTime: {data.time}\nLocation: {data.city}\n\n{context_string}\n\nCHART DATA:\n{chart_data}"
+        user_prompt = f"Name: {data.name}\nDOB: {formatted_dob}\nTime: {data.time}\nLocation: {data.city}\nCurrent Age: {age}\nCurrent Profection Year: {profection_house}\n\n{context_string}\n\nCHART DATA:\n{chart_data}"
 
         genai.configure(api_key=os.environ.get("GEMINI_API_KEY"))
         model = genai.GenerativeModel("gemini-3.1-pro-preview")
