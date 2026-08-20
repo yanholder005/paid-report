@@ -62,7 +62,7 @@ async def get_coordinates(city, nation):
             await asyncio.sleep(1) 
     raise Exception(f"Could not locate '{loc_query}'.")
 
-async def get_chart_data(name, year, month, day, hour, minute, city, nation):
+async def get_chart_data(name, year, month, day, hour, minute, city, nation, bump=False):
     location = await get_coordinates(city, nation)
     tz_str = await asyncio.to_thread(tf.timezone_at, lng=location.longitude, lat=location.latitude)
     
@@ -107,6 +107,39 @@ async def get_chart_data(name, year, month, day, hour, minute, city, nation):
                     if abs(diff - asp_angle) <= max_orb:
                         lines.append(f"Transit {t_ent['name']} {asp_name} Natal {n_ent['name']}")
 
+    if bump:
+        lines.append("\n=== 6-MONTH TRANSIT FORECAST DATA ===")
+        # Calculate transits for the 1st day of the next 6 months
+        for i in range(1, 7):
+            m_math = now_utc.month - 1 + i
+            target_year = now_utc.year + (m_math // 12)
+            target_month = (m_math % 12) + 1
+            target_date = datetime.datetime(target_year, target_month, 1, 12, 0)
+            month_name = target_date.strftime('%B %Y')
+            
+            lines.append(f"\n--- {month_name} ---")
+            
+            # Generate the sky for that future month
+            future_subj = await asyncio.to_thread(AstrologicalSubject, f"T_{i}", target_year, target_month, 1, 12, 0, lng=0.0, lat=51.5, tz_str="UTC", city="London")
+            
+            # Filter strictly to slow-moving outer planets for monthly forecasting
+            slow_points = [("Mars", "mars"), ("Jupiter", "jupiter"), ("Saturn", "saturn"), ("Uranus", "uranus"), ("Neptune", "neptune"), ("Pluto", "pluto"), ("North Node", "true_node")]
+            future_ents = [{"name": n, "abs_pos": get_abs_pos(future_subj, a)} for n, a in slow_points if getattr(future_subj, a, None)]
+            
+            month_has_transits = False
+            for f_ent in future_ents:
+                for n_ent in natal_entities:
+                    diff = abs(f_ent["abs_pos"] - n_ent["abs_pos"])
+                    diff = min(diff, 360 - diff)
+                    max_orb = 2 # Tight 2-degree orb for predictive accuracy
+                    for asp_name, asp_angle in [("Conjunction", 0), ("Square", 90), ("Opposition", 180)]:
+                        if abs(diff - asp_angle) <= max_orb:
+                            lines.append(f"Transit {f_ent['name']} {asp_name} Natal {n_ent['name']}")
+                            month_has_transits = True
+            
+            if not month_has_transits:
+                lines.append("No exact hard aspects forming this month. (Focus on ongoing macro transits).")
+
     return "\n".join(lines)
 
 async def process_paid_report(data: PaidReportRequest):
@@ -128,7 +161,7 @@ async def process_paid_report(data: PaidReportRequest):
         suffix = suffixes.get(prof_num if prof_num < 20 else prof_num % 10, 'th')
         profection_house = f"{prof_num}{suffix} House"
 
-        chart_data = await get_chart_data(data.name, year, month, day, hour, minute, data.city, data.nation)
+        chart_data = await get_chart_data(data.name, year, month, day, hour, minute, data.city, data.nation, data.bump)
 
         client = await asyncio.to_thread(get_gspread_client)
         paid_sheet = client.open_by_key(os.environ.get("GOOGLE_SHEET_ID")).worksheet("PaidReports")
