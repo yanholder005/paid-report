@@ -11,6 +11,8 @@ from google.oauth2.service_account import Credentials
 import asyncio
 import os
 import json
+import time
+import random
 import datetime
 import markdown
 from weasyprint import HTML
@@ -40,17 +42,41 @@ def get_gspread_client():
         GSPREAD_CLIENT = gspread.authorize(creds)
     return GSPREAD_CLIENT
 
-def send_admin_alert(msg, email):
+def exponential_backoff_retry(func, *args, max_retries=4, **kwargs):
+    for attempt in range(max_retries):
+        try:
+            return func(*args, **kwargs)
+        except Exception as e:
+            if attempt == max_retries - 1:
+                raise e
+            time.sleep((2 ** attempt) + random.uniform(0, 1))
+
+def send_admin_alert(msg, email, status_msg=""):
     try:
         resend.api_key = os.environ.get("RESEND_API_KEY")
         resend.Emails.send({
             "from": "Yan Holder <yan@yanholder.com>",
             "to": ["yan@yanholder.com"],
             "subject": "⚠️ ALARM: Paid Report Failed",
-            "html": f"<p>Error: {msg}</p><p>Email: {email}</p>"
+            "html": f"<p>Error: {msg}</p><p>Email: {email}</p><p>Status: {status_msg}</p>"
         })
     except:
         pass
+
+# --- NEW: SHEET STATE MANAGERS ---
+def update_request_status(email, new_status):
+    try:
+        client = get_gspread_client()
+        sheet = client.open_by_key(os.environ.get("GOOGLE_SHEET_ID")).worksheet("PaidReports")
+        emails = sheet.col_values(2) # Column 2 is Email
+        
+        # Search backwards to find the MOST RECENT purchase if they bought twice
+        row_index = len(emails) - emails[::-1].index(email) 
+        
+        def update(): sheet.update_cell(row_index, 9, new_status) # Column 9 is Status
+        exponential_backoff_retry(update)
+    except Exception as e:
+        print(f"Failed to update status for {email}: {e}")
 
 async def get_coordinates(city, nation):
     loc_query = f"{city}, {nation}"
@@ -109,7 +135,6 @@ async def get_chart_data(name, year, month, day, hour, minute, city, nation, bum
 
     if bump:
         lines.append("\n=== 6-MONTH TRANSIT FORECAST DATA ===")
-        # Calculate transits for the 1st day of the next 6 months
         for i in range(1, 7):
             m_math = now_utc.month - 1 + i
             target_year = now_utc.year + (m_math // 12)
@@ -119,10 +144,8 @@ async def get_chart_data(name, year, month, day, hour, minute, city, nation, bum
             
             lines.append(f"\n--- {month_name} ---")
             
-            # Generate the sky for that future month
             future_subj = await asyncio.to_thread(AstrologicalSubject, f"T_{i}", target_year, target_month, 1, 12, 0, lng=0.0, lat=51.5, tz_str="UTC", city="London")
             
-            # Filter strictly to slow-moving outer planets for monthly forecasting
             slow_points = [("Mars", "mars"), ("Jupiter", "jupiter"), ("Saturn", "saturn"), ("Uranus", "uranus"), ("Neptune", "neptune"), ("Pluto", "pluto"), ("North Node", "true_node")]
             future_ents = [{"name": n, "abs_pos": get_abs_pos(future_subj, a)} for n, a in slow_points if getattr(future_subj, a, None)]
             
@@ -131,7 +154,7 @@ async def get_chart_data(name, year, month, day, hour, minute, city, nation, bum
                 for n_ent in natal_entities:
                     diff = abs(f_ent["abs_pos"] - n_ent["abs_pos"])
                     diff = min(diff, 360 - diff)
-                    max_orb = 2 # Tight 2-degree orb for predictive accuracy
+                    max_orb = 2 
                     for asp_name, asp_angle in [("Conjunction", 0), ("Square", 90), ("Opposition", 180)]:
                         if abs(diff - asp_angle) <= max_orb:
                             lines.append(f"Transit {f_ent['name']} {asp_name} Natal {n_ent['name']}")
@@ -142,17 +165,18 @@ async def get_chart_data(name, year, month, day, hour, minute, city, nation, bum
 
     return "\n".join(lines)
 
-async def process_paid_report(data: PaidReportRequest):
-    # THE 15-MINUTE PREMIUM ANTICIPATION DELAY
-    await asyncio.sleep(900)
+async def process_paid_report(data: PaidReportRequest, skip_delay=False):
+    # If recovering a failed task, we skip the 15 minute wait
+    if not skip_delay:
+        await asyncio.sleep(900)
 
     try:
+        await asyncio.to_thread(update_request_status, data.email, "PROCESSING")
+
         year, month, day = map(int, data.date.split("-"))
         hour, minute = map(int, data.time.split(":"))
         formatted_dob = datetime.date(year, month, day).strftime("%B %d, %Y")
 
-        # --- THE BULLETPROOF PROFECTION CALCULATOR ---
-        # Python does the exact math so the AI never hallucinates the year
         now_date = datetime.datetime.utcnow()
         age = now_date.year - year - ((now_date.month, now_date.day) < (month, day))
         
@@ -164,19 +188,11 @@ async def process_paid_report(data: PaidReportRequest):
         chart_data = await get_chart_data(data.name, year, month, day, hour, minute, data.city, data.nation, data.bump)
 
         client = await asyncio.to_thread(get_gspread_client)
-        paid_sheet = client.open_by_key(os.environ.get("GOOGLE_SHEET_ID")).worksheet("PaidReports")
         settings = client.open_by_key(os.environ.get("GOOGLE_SHEET_ID")).worksheet("Settings")
         
-        # --- THE DYNAMIC PROMPT TOGGLE ---
-        # Grabs B2 if they bought the bump, otherwise grabs B1
-        if data.bump:
-            master_prompt = settings.acell('B2').value
-        else:
-            master_prompt = settings.acell('B1').value
-
+        master_prompt = settings.acell('B2').value if data.bump else settings.acell('B1').value
         context_string = f"Deep Dive Context from User: {data.question}\n"
 
-        # --- THE CROSS-REFERENCE BACKWARD LOOKUP ---
         try:
             free_sheet = client.open_by_key(os.environ.get("GOOGLE_SHEET_ID")).worksheet("Sheet1")
             all_values = free_sheet.get_all_values()
@@ -199,20 +215,24 @@ async def process_paid_report(data: PaidReportRequest):
                     context_string += f"Original Situation: {orig_q}\n\n"
                     context_string += f"The Free Report They Already Read:\n{orig_report}\n"
                     context_string += f"--- END MEMORY ---\n\n"
-        except Exception as e:
-            print(f"Warning: Could not fetch past records for cross-reference: {e}")
+        except:
             pass
 
         user_prompt = f"Name: {data.name}\nDOB: {formatted_dob}\nTime: {data.time}\nLocation: {data.city}\nCurrent Age: {age}\nCurrent Profection Year: {profection_house}\n\n{context_string}\n\nCHART DATA:\n{chart_data}"
 
         genai.configure(api_key=os.environ.get("GEMINI_API_KEY"))
         model = genai.GenerativeModel("gemini-3.1-pro-preview")
-        response = await model.generate_content_async(f"{master_prompt}\n\n{user_prompt}")
-        report_markdown = response.text
-
-        # Log to PaidReports Google Sheet
-        row = [data.name, data.email, data.date, data.time, f"{data.city}, {data.nation}", data.question, "Yes" if data.bump else "No", datetime.datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")]
-        await asyncio.to_thread(paid_sheet.append_row, row)
+        
+        # MICRO-RETRY LOOP: API Generation
+        report_markdown = ""
+        for attempt in range(3):
+            try:
+                response = await model.generate_content_async(f"{master_prompt}\n\n{user_prompt}")
+                report_markdown = response.text
+                break
+            except Exception as e:
+                if attempt == 2: raise Exception(f"Gemini API Error: {e}")
+                await asyncio.sleep(5)
 
         # Build PDF
         html_content = markdown.markdown(report_markdown)
@@ -222,89 +242,27 @@ async def process_paid_report(data: PaidReportRequest):
             <style>
                 @import url('https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,600;12..96,700&family=Figtree:wght@400;600&display=swap');
                 
-                /* Reset default browser margins */
-                html, body {{
-                    margin: 0;
-                    padding: 0;
-                    background-color: #FDFBF7;
-                }}
+                html, body {{ margin: 0; padding: 0; background-color: #FDFBF7; }}
+                @page {{ size: A4; margin: 2.5cm 2.2cm; background-color: #FDFBF7; @bottom-center {{ content: counter(page); font-family: 'Figtree', sans-serif; font-size: 13px; color: rgba(17, 17, 17, 0.5); }} }}
+                @page cover {{ margin: 0; background-color: #FDFBF7; @bottom-center {{ content: none; }} }}
                 
-                /* 1. Standard pages (Text): Margins and Page Numbers */
-                @page {{ 
-                    size: A4; 
-                    margin: 2.5cm 2.2cm; 
-                    background-color: #FDFBF7; 
-                    @bottom-center {{
-                        content: counter(page);
-                        font-family: 'Figtree', sans-serif;
-                        font-size: 13px;
-                        color: rgba(17, 17, 17, 0.5);
-                    }}
-                }}
+                body {{ font-family: 'Figtree', sans-serif; color: #111; font-size: 14.5px; line-height: 1.8; }}
+                .cover-container {{ page: cover; width: 100vw; height: 100vh; display: block; page-break-after: always; overflow: hidden; }}
+                .cover-container img {{ width: 100%; height: 100%; object-fit: cover; display: block; }}
+                .content-page {{ counter-reset: page 1; }}
                 
-                /* 2. Named page exclusively for the cover (Zero margins, No page numbers) */
-                @page cover {{ 
-                    margin: 0; 
-                    background-color: #FDFBF7;
-                    @bottom-center {{
-                        content: none;
-                    }}
-                }}
-                
-                body {{ 
-                    font-family: 'Figtree', sans-serif; 
-                    color: #111; 
-                    font-size: 14.5px; 
-                    line-height: 1.8; 
-                }}
-                
-                /* 3. Cover Container: Forces page break and uses the cover @page rules */
-                .cover-container {{ 
-                    page: cover; 
-                    width: 100vw; 
-                    height: 100vh; 
-                    display: block; 
-                    page-break-after: always; 
-                    overflow: hidden;
-                }}
-                
-                .cover-container img {{
-                    width: 100%;
-                    height: 100%;
-                    object-fit: cover;
-                    display: block;
-                }}
-                
-                /* 4. Text Content: Resets the page counter so this starts at "1" */
-                .content-page {{
-                    counter-reset: page 1;
-                }}
-                
-                h1, h2, h3 {{ 
-                    font-family: 'Bricolage Grotesque', sans-serif; 
-                    color: #000; 
-                    margin-top: 35px; 
-                    margin-bottom: 15px; 
-                }}
-                
+                h1, h2, h3 {{ font-family: 'Bricolage Grotesque', sans-serif; color: #000; margin-top: 35px; margin-bottom: 15px; }}
                 h2 {{ font-size: 22px; border-bottom: 1px solid #ddd; padding-bottom: 5px; }}
                 h3 {{ font-size: 18px; }}
                 p {{ margin-bottom: 16px; text-align: justify; }}
                 strong {{ font-weight: 700; color: #000; }}
                 
-                .header-box {{ 
-                    text-align: left; 
-                    margin-bottom: 40px; 
-                    padding-bottom: 20px; 
-                    border-bottom: 2px dashed #ccc; 
-                }}
-                
+                .header-box {{ text-align: left; margin-bottom: 40px; padding-bottom: 20px; border-bottom: 2px dashed #ccc; }}
                 .header-title {{ font-family: 'Bricolage Grotesque', sans-serif; font-size: 32px; font-weight: 700; line-height: 1.2; margin-bottom: 8px; }}
                 .header-sub {{ font-size: 13px; font-weight: 600; color: #555; text-transform: uppercase; letter-spacing: 1.5px; }}
             </style>
         </head>
         <body>
-            <!-- The Bulletproof Cover Image Container -->
             <div class="cover-container">
                 <img src="https://yanholder.com/assets/images/image12.jpg?v=104f716e" alt="Astrological Blueprint Cover" />
             </div>
@@ -320,33 +278,100 @@ async def process_paid_report(data: PaidReportRequest):
         </html>
         """
         
-        pdf_file = HTML(string=pdf_html).write_pdf()
-
-        # Email PDF via Resend
+        # MICRO-RETRY LOOP: PDF Build & Email Send
         resend.api_key = os.environ.get("RESEND_API_KEY")
-        email_body = f"""
-        <p>Hi {data.name},</p>
-        <p>Your complete astrological blueprint has been compiled, formatted, and secured.</p>
-        <p>Attached to this email is your final PDF report. It contains the exact architecture of your chart, the specific blocks currently running in your subconscious, and the concrete direction required to clear them.</p>
-        <p>Take your time with this. It is a lot of information.</p>
-        <p>Best,<br>Yan</p>
-        """
-        resend.Emails.send({
-            "from": "Yan Holder <yan@yanholder.com>",
-            "to": [data.email],
-            "subject": f"{data.name}, Your Complete Astrological Blueprint is Ready",
-            "html": email_body,
-            "attachments": [{"filename": f"{data.name}_Blueprint.pdf", "content": list(pdf_file)}]
-        })
+        for attempt in range(3):
+            try:
+                pdf_file = HTML(string=pdf_html).write_pdf()
+                email_body = f"""
+                <p>Hi {data.name},</p>
+                <p>Your complete astrological blueprint has been compiled, formatted, and secured.</p>
+                <p>Attached to this email is your final PDF report. It contains the exact architecture of your chart, the specific blocks currently running in your subconscious, and the concrete direction required to clear them.</p>
+                <p>Take your time with this. It is a lot of information.</p>
+                <p>Best,<br>Yan</p>
+                """
+                resend.Emails.send({
+                    "from": "Yan Holder <yan@yanholder.com>",
+                    "to": [data.email],
+                    "subject": f"{data.name}, Your Complete Astrological Blueprint is Ready",
+                    "html": email_body,
+                    "attachments": [{"filename": f"{data.name}_Blueprint.pdf", "content": list(pdf_file)}]
+                })
+                break
+            except Exception as e:
+                if attempt == 2: raise Exception(f"PDF/Email Error: {e}")
+                await asyncio.sleep(5)
+
+        # Mark as delivered!
+        await asyncio.to_thread(update_request_status, data.email, "DELIVERED")
 
     except Exception as e:
-        print(f"Error: {e}")
-        send_admin_alert(str(e), data.email)
+        print(f"Process Error: {e}")
+        await asyncio.to_thread(update_request_status, data.email, f"FAILED: {str(e)[:40]}")
+        send_admin_alert(str(e), data.email, "Marked as FAILED in sheet.")
 
 @app.post("/generate-paid")
 async def generate_paid(data: PaidReportRequest, bg_tasks: BackgroundTasks):
+    # Log to Google Sheets IMMEDIATELY with 'QUEUED' status before anything else happens
+    try:
+        client = get_gspread_client()
+        paid_sheet = client.open_by_key(os.environ.get("GOOGLE_SHEET_ID")).worksheet("PaidReports")
+        row = [data.name, data.email, data.date, data.time, f"{data.city}, {data.nation}", data.question, "Yes" if data.bump else "No", datetime.datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"), "QUEUED"]
+        
+        def append(): paid_sheet.append_row(row)
+        exponential_backoff_retry(append)
+    except Exception as e:
+        print(f"Failed to log initial request: {e}")
+        # Even if logging fails, we proceed so the user gets their product
+    
     bg_tasks.add_task(process_paid_report, data)
     return {"success": True}
+
+@app.get("/process-queue")
+async def process_queue(bg_tasks: BackgroundTasks):
+    """
+    Hit this endpoint via cronjob to auto-recover any crashed or failed reports.
+    It scans the sheet, and if it finds a FAILED task, or a QUEUED task older than 20 mins, it retries it.
+    """
+    try:
+        client = get_gspread_client()
+        sheet = client.open_by_key(os.environ.get("GOOGLE_SHEET_ID")).worksheet("PaidReports")
+        records = sheet.get_all_values()
+        
+        now_utc = datetime.datetime.utcnow()
+        recovered_count = 0
+
+        for i, row in enumerate(records):
+            if i == 0 or len(row) < 9: 
+                continue 
+            
+            email = row[1]
+            timestamp_str = row[7]
+            status = row[8]
+            
+            try:
+                ts = datetime.datetime.strptime(timestamp_str, "%Y-%m-%d %H:%M:%S")
+                minutes_elapsed = (now_utc - ts).total_seconds() / 60
+            except:
+                continue
+            
+            if "FAILED" in status or (status == "QUEUED" and minutes_elapsed > 20):
+                city_nation = row[4].split(", ")
+                city = city_nation[0]
+                nation = city_nation[1] if len(city_nation) > 1 else ""
+                
+                data = PaidReportRequest(
+                    name=row[0], email=email, date=row[2], time=row[3], 
+                    city=city, nation=nation, question=row[5], bump=(row[6] == "Yes")
+                )
+                
+                sheet.update_cell(i + 1, 9, "RETRYING")
+                bg_tasks.add_task(process_paid_report, data, skip_delay=True)
+                recovered_count += 1
+                
+        return {"status": f"Triggered recovery for {recovered_count} records."}
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
 
 @app.get("/")
 async def health_check(): return {"status": "paid engine active"}
