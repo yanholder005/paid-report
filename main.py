@@ -90,14 +90,15 @@ async def get_chart_data(name, year, month, day, hour, minute, city, nation, bum
     location = await get_coordinates(city, nation)
     tz_str = await asyncio.to_thread(tf.timezone_at, lng=location.longitude, lat=location.latitude)
     
-    subject = await asyncio.to_thread(AstrologicalSubject, name, year, month, day, hour, minute, lng=location.longitude, lat=location.latitude, tz_str=tz_str, city=city)
+    # FIX: online=False prevents Geonames lag
+    subject = await asyncio.to_thread(AstrologicalSubject, name, year, month, day, hour, minute, lng=location.longitude, lat=location.latitude, tz_str=tz_str, city=city, online=False)
     
     dt = datetime.datetime(year, month, day, hour, minute)
     dt_future = dt + datetime.timedelta(hours=1)
-    subject_future = await asyncio.to_thread(AstrologicalSubject, name + "_future", dt_future.year, dt_future.month, dt_future.day, dt_future.hour, dt_future.minute, lng=location.longitude, lat=location.latitude, tz_str=tz_str, city=city)
+    subject_future = await asyncio.to_thread(AstrologicalSubject, name + "_future", dt_future.year, dt_future.month, dt_future.day, dt_future.hour, dt_future.minute, lng=location.longitude, lat=location.latitude, tz_str=tz_str, city=city, online=False)
 
     now_utc = datetime.datetime.utcnow()
-    subject_transit = await asyncio.to_thread(AstrologicalSubject, "Transit", now_utc.year, now_utc.month, now_utc.day, now_utc.hour, now_utc.minute, lng=0.0, lat=51.5, tz_str="UTC", city="London")
+    subject_transit = await asyncio.to_thread(AstrologicalSubject, "Transit", now_utc.year, now_utc.month, now_utc.day, now_utc.hour, now_utc.minute, lng=0.0, lat=51.5, tz_str="UTC", city="London", online=False)
 
     def deg_to_d_m(deg):
         d = int(deg)
@@ -307,7 +308,7 @@ async def get_chart_data(name, year, month, day, hour, minute, city, nation, bum
             
             lines.append(f"\n--- {month_name} ---")
             
-            future_subj = await asyncio.to_thread(AstrologicalSubject, f"T_{i}", target_year, target_month, 1, 12, 0, lng=0.0, lat=51.5, tz_str="UTC", city="London")
+            future_subj = await asyncio.to_thread(AstrologicalSubject, f"T_{i}", target_year, target_month, 1, 12, 0, lng=0.0, lat=51.5, tz_str="UTC", city="London", online=False)
             
             slow_points = [("Mars", "mars"), ("Jupiter", "jupiter"), ("Saturn", "saturn"), ("Uranus", "uranus"), ("Neptune", "neptune"), ("Pluto", "pluto"), ("North Node", "true_node")]
             
