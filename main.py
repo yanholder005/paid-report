@@ -63,17 +63,15 @@ def send_admin_alert(msg, email, status_msg=""):
     except:
         pass
 
-# --- NEW: SHEET STATE MANAGERS ---
 def update_request_status(email, new_status):
     try:
         client = get_gspread_client()
         sheet = client.open_by_key(os.environ.get("GOOGLE_SHEET_ID")).worksheet("PaidReports")
-        emails = sheet.col_values(2) # Column 2 is Email
+        emails = sheet.col_values(2)
         
-        # Search backwards to find the MOST RECENT purchase if they bought twice
         row_index = len(emails) - emails[::-1].index(email) 
         
-        def update(): sheet.update_cell(row_index, 9, new_status) # Column 9 is Status
+        def update(): sheet.update_cell(row_index, 9, new_status)
         exponential_backoff_retry(update)
     except Exception as e:
         print(f"Failed to update status for {email}: {e}")
@@ -94,44 +92,172 @@ async def get_chart_data(name, year, month, day, hour, minute, city, nation, bum
     
     subject = await asyncio.to_thread(AstrologicalSubject, name, year, month, day, hour, minute, lng=location.longitude, lat=location.latitude, tz_str=tz_str, city=city)
     
+    dt = datetime.datetime(year, month, day, hour, minute)
+    dt_future = dt + datetime.timedelta(hours=1)
+    subject_future = await asyncio.to_thread(AstrologicalSubject, name + "_future", dt_future.year, dt_future.month, dt_future.day, dt_future.hour, dt_future.minute, lng=location.longitude, lat=location.latitude, tz_str=tz_str, city=city)
+
     now_utc = datetime.datetime.utcnow()
     subject_transit = await asyncio.to_thread(AstrologicalSubject, "Transit", now_utc.year, now_utc.month, now_utc.day, now_utc.hour, now_utc.minute, lng=0.0, lat=51.5, tz_str="UTC", city="London")
 
     def deg_to_d_m(deg):
         d = int(deg)
         m = int(round((deg - d) * 60))
-        if m == 60: d += 1; m = 0
+        if m == 60:
+            d += 1
+            m = 0
         return f"{d}°{m:02d}’"
 
-    def get_abs_pos(subj, attr):
+    def get_obj(subj, attr):
         obj = getattr(subj, attr, None)
-        return getattr(obj, "abs_pos", 0) if not isinstance(obj, dict) else obj.get("abs_pos", 0)
+        if not obj and attr == "part_of_fortune":
+            obj = getattr(subj, "pars_fortuna", None)
+        if not obj and attr == "true_node":
+            obj = getattr(subj, "mean_node", None)
+        if not obj and attr == "part_of_fortune":
+            asc_obj = getattr(subj, "first_house", None)
+            sun_obj = getattr(subj, "sun", None)
+            moon_obj = getattr(subj, "moon", None)
+            if asc_obj and sun_obj and moon_obj:
+                asc_abs = getattr(asc_obj, "abs_pos", 0) if not isinstance(asc_obj, dict) else asc_obj.get("abs_pos", 0)
+                sun_abs = getattr(sun_obj, "abs_pos", 0) if not isinstance(sun_obj, dict) else sun_obj.get("abs_pos", 0)
+                moon_abs = getattr(moon_obj, "abs_pos", 0) if not isinstance(moon_obj, dict) else moon_obj.get("abs_pos", 0)
+                sun_h = getattr(sun_obj, "house", "") if not isinstance(sun_obj, dict) else sun_obj.get("house", "")
+                is_day = any(x in sun_h for x in ["7", "8", "9", "10", "11", "12", "Seventh", "Eighth", "Ninth", "Tenth", "Eleventh", "Twelfth"])
+                f_abs = (asc_abs + moon_abs - sun_abs) % 360 if is_day else (asc_abs + sun_abs - moon_abs) % 360
+                signs = ["Aries", "Taurus", "Gemini", "Cancer", "Leo", "Virgo", "Libra", "Scorpio", "Sagittarius", "Capricorn", "Aquarius", "Pisces"]
+                return {"sign": signs[int(f_abs / 30)], "position": f_abs % 30, "abs_pos": f_abs}
+        if not obj and attr == "vertex":
+            v_abs = None
+            if hasattr(subj, "_ascmc") and subj._ascmc and len(subj._ascmc) > 3:
+                v_abs = subj._ascmc[3]
+            elif hasattr(subj, "ascmc") and subj.ascmc and len(subj.ascmc) > 3:
+                v_abs = subj.ascmc[3]
+            if v_abs is not None:
+                signs = ["Aries", "Taurus", "Gemini", "Cancer", "Leo", "Virgo", "Libra", "Scorpio", "Sagittarius", "Capricorn", "Aquarius", "Pisces"]
+                return {"sign": signs[int(v_abs / 30)], "position": v_abs % 30, "abs_pos": v_abs}
+        return obj
+
+    def clean_house_name(h):
+        mapping = {
+            "First_House": "1st", "Second_House": "2nd", "Third_House": "3rd",
+            "Fourth_House": "4th", "Fifth_House": "5th", "Sixth_House": "6th",
+            "Seventh_House": "7th", "Eighth_House": "8th", "Ninth_House": "9th",
+            "Tenth_House": "10th", "Eleventh_House": "11th", "Twelfth_House": "12th"
+        }
+        return mapping.get(h, h) if h else ""
+
+    def format_pos(p_name, obj):
+        if not obj: return None
+        is_dict = isinstance(obj, dict)
+        sign = obj.get("sign", "") if is_dict else getattr(obj, "sign", "")
+        pos = obj.get("position", obj.get("pos", 0)) if is_dict else getattr(obj, "position", getattr(obj, "pos", 0)) 
+        house = obj.get("house", "") if is_dict else getattr(obj, "house", "")
+        abs_pos = obj.get("abs_pos", None) if is_dict else getattr(obj, "abs_pos", None)
+        rx = ", Retrograde" if (obj.get("retrograde", False) if is_dict else getattr(obj, "retrograde", False)) else ""
+        
+        if not house and abs_pos is not None:
+            houses_list = ["first_house", "second_house", "third_house", "fourth_house", "fifth_house", "sixth_house", "seventh_house", "eighth_house", "ninth_house", "tenth_house", "eleventh_house", "twelfth_house"]
+            cusps = []
+            for h in houses_list:
+                ho = getattr(subject, h, None)
+                if ho:
+                    c = getattr(ho, "abs_pos", ho.get("abs_pos", 0)) if isinstance(ho, dict) else getattr(ho, "abs_pos", 0)
+                    cusps.append(c)
+            if len(cusps) == 12:
+                for i in range(12):
+                    c1 = cusps[i]
+                    c2 = cusps[(i+1)%12]
+                    if (c1 < c2 and c1 <= abs_pos < c2) or (c1 > c2 and (abs_pos >= c1 or abs_pos < c2)):
+                        house = str(i+1) + ("st" if i==0 else "nd" if i==1 else "rd" if i==2 else "th")
+                        break
+        house_clean = clean_house_name(house)
+        house_str = f", in {house_clean} House" if house_clean else (f", in {house} House" if house else "")
+        return f"{p_name} in {sign} {deg_to_d_m(pos)}{rx}{house_str}"
+
+    points = [
+        ("Sun", "sun"), ("Moon", "moon"), ("Mercury", "mercury"), ("Venus", "venus"), 
+        ("Mars", "mars"), ("Jupiter", "jupiter"), ("Saturn", "saturn"), ("Uranus", "uranus"), 
+        ("Neptune", "neptune"), ("Pluto", "pluto"), ("North Node", "true_node"), 
+        ("Lilith", "lilith"), ("Chiron", "chiron"), ("Fortune", "part_of_fortune"), 
+        ("Vertex", "vertex")
+    ]
 
     lines = []
-    points = [("Sun", "sun"), ("Moon", "moon"), ("Mercury", "mercury"), ("Venus", "venus"), ("Mars", "mars"), ("Jupiter", "jupiter"), ("Saturn", "saturn"), ("Uranus", "uranus"), ("Neptune", "neptune"), ("Pluto", "pluto"), ("North Node", "true_node"), ("Chiron", "chiron")]
     
     for d_name, a_name in points:
-        obj = getattr(subject, a_name, None)
+        obj = get_obj(subject, a_name)
         if obj:
-            sign = getattr(obj, "sign", "")
-            pos = getattr(obj, "position", 0)
-            house = getattr(obj, "house", "")
-            h_str = f", in {house} House" if house else ""
-            lines.append(f"{d_name} in {sign} {deg_to_d_m(pos)}{h_str}")
+            fmt = format_pos(d_name, obj)
+            if fmt: lines.append(fmt)
 
-    transit_entities = [{"name": n, "abs_pos": get_abs_pos(subject_transit, a)} for n, a in points if getattr(subject_transit, a, None)]
-    natal_entities = [{"name": n, "abs_pos": get_abs_pos(subject, a)} for n, a in points if getattr(subject, a, None)]
+    # ADDED: Ascendant, MC, and House Cusps so the AI stops hallucinating them
+    angles = [("ASC", "first_house"), ("MC", "tenth_house")]
+    for d_name, a_name in angles:
+        obj = get_obj(subject, a_name)
+        if obj:
+            pos = getattr(obj, "position", getattr(obj, "pos", 0)) if not isinstance(obj, dict) else obj.get("position", obj.get("pos", 0))
+            sign = getattr(obj, "sign", "") if not isinstance(obj, dict) else obj.get("sign", "")
+            lines.append(f"{d_name} in {sign} {deg_to_d_m(pos)}")
 
-    if transit_entities:
-        lines.append("\n=== CURRENT TRANSITS TO NATAL ===")
-        for t_ent in transit_entities:
-            for n_ent in natal_entities:
-                diff = abs(t_ent["abs_pos"] - n_ent["abs_pos"])
-                diff = min(diff, 360 - diff)
-                max_orb = 3 if t_ent["name"] in ["Sun", "Moon"] else 2
-                for asp_name, asp_angle in [("Conjunction", 0), ("Square", 90), ("Opposition", 180)]:
-                    if abs(diff - asp_angle) <= max_orb:
-                        lines.append(f"Transit {t_ent['name']} {asp_name} Natal {n_ent['name']}")
+    houses_map = [
+        ("1st House", "first_house"), ("2nd House", "second_house"), ("3rd House", "third_house"),
+        ("4th House", "fourth_house"), ("5th House", "fifth_house"), ("6th House", "sixth_house"),
+        ("7th House", "seventh_house"), ("8th House", "eighth_house"), ("9th House", "ninth_house"),
+        ("10th House", "tenth_house"), ("11th House", "eleventh_house"), ("12th House", "twelfth_house"),
+    ]
+    for d_name, a_name in houses_map:
+        obj = get_obj(subject, a_name)
+        if obj:
+            pos = getattr(obj, "position", getattr(obj, "pos", 0)) if not isinstance(obj, dict) else obj.get("position", obj.get("pos", 0))
+            sign = getattr(obj, "sign", "") if not isinstance(obj, dict) else obj.get("sign", "")
+            lines.append(f"{d_name} in {sign} {deg_to_d_m(pos)}")
+
+    def get_abs_pos(obj):
+        if not obj: return None
+        return getattr(obj, "abs_pos", 0) if not isinstance(obj, dict) else obj.get("abs_pos", 0)
+
+    # ADDED: Natal Aspect Calculation (T-Squares, Trines, etc.)
+    entities = []
+    for d_name, a_name in points + angles:
+        obj = get_obj(subject, a_name)
+        obj_f = get_obj(subject_future, a_name)
+        if obj and obj_f:
+            entities.append({
+                "name": "Ascendant" if d_name == "ASC" else d_name,
+                "abs_pos": get_abs_pos(obj),
+                "abs_pos_f": get_abs_pos(obj_f),
+                "is_luminary": d_name in ["Sun", "Moon"]
+            })
+
+    def get_diff(p1, p2):
+        d = abs(p1 - p2)
+        return min(d, 360 - d)
+
+    aspect_types = [("Conjunction", 0), ("Sextile", 60), ("Square", 90), ("Trine", 120), ("Opposition", 180)]
+    aspects_lines = []
+    
+    for i in range(len(entities)):
+        for j in range(i + 1, len(entities)):
+            e1, e2 = entities[i], entities[j]
+            if e1["name"] in ["Ascendant", "MC", "DSC", "IC"] and e2["name"] in ["Ascendant", "MC", "DSC", "IC"]: continue
+            
+            diff = get_diff(e1["abs_pos"], e2["abs_pos"])
+            diff_f = get_diff(e1["abs_pos_f"], e2["abs_pos_f"])
+            
+            max_orb = 10 if (e1["is_luminary"] or e2["is_luminary"]) else 8
+            points_names = ["North Node", "Lilith", "Chiron", "Fortune", "Vertex", "Ascendant", "MC", "DSC", "IC"]
+            if e1["name"] in points_names or e2["name"] in points_names: max_orb = 6
+                
+            for asp_name, asp_angle in aspect_types:
+                orb_limit = max_orb - (2 if asp_name == "Sextile" else 0)
+                orb = abs(diff - asp_angle)
+                if orb <= orb_limit:
+                    orb_f = abs(diff_f - asp_angle)
+                    status = "Applying" if orb_f < orb else "Separating"
+                    aspects_lines.append(f"{e1['name']} {asp_name} {e2['name']} (Orb: {deg_to_d_m(orb)}, {status})")
+                    break 
+
+    lines.extend(aspects_lines)
 
     if bump:
         lines.append("\n=== 6-MONTH TRANSIT FORECAST DATA ===")
@@ -151,7 +277,7 @@ async def get_chart_data(name, year, month, day, hour, minute, city, nation, bum
             
             month_has_transits = False
             for f_ent in future_ents:
-                for n_ent in natal_entities:
+                for n_ent in entities:
                     diff = abs(f_ent["abs_pos"] - n_ent["abs_pos"])
                     diff = min(diff, 360 - diff)
                     max_orb = 2 
@@ -165,8 +291,8 @@ async def get_chart_data(name, year, month, day, hour, minute, city, nation, bum
 
     return "\n".join(lines)
 
+
 async def process_paid_report(data: PaidReportRequest, skip_delay=False):
-    # If recovering a failed task, we skip the 15 minute wait
     if not skip_delay:
         await asyncio.sleep(900)
 
@@ -302,7 +428,6 @@ async def process_paid_report(data: PaidReportRequest, skip_delay=False):
                 if attempt == 2: raise Exception(f"PDF/Email Error: {e}")
                 await asyncio.sleep(5)
 
-        # Mark as delivered!
         await asyncio.to_thread(update_request_status, data.email, "DELIVERED")
 
     except Exception as e:
@@ -310,9 +435,9 @@ async def process_paid_report(data: PaidReportRequest, skip_delay=False):
         await asyncio.to_thread(update_request_status, data.email, f"FAILED: {str(e)[:40]}")
         send_admin_alert(str(e), data.email, "Marked as FAILED in sheet.")
 
+
 @app.post("/generate-paid")
 async def generate_paid(data: PaidReportRequest, bg_tasks: BackgroundTasks):
-    # Log to Google Sheets IMMEDIATELY with 'QUEUED' status before anything else happens
     try:
         client = get_gspread_client()
         paid_sheet = client.open_by_key(os.environ.get("GOOGLE_SHEET_ID")).worksheet("PaidReports")
@@ -322,17 +447,12 @@ async def generate_paid(data: PaidReportRequest, bg_tasks: BackgroundTasks):
         exponential_backoff_retry(append)
     except Exception as e:
         print(f"Failed to log initial request: {e}")
-        # Even if logging fails, we proceed so the user gets their product
     
     bg_tasks.add_task(process_paid_report, data)
     return {"success": True}
 
 @app.get("/process-queue")
 async def process_queue(bg_tasks: BackgroundTasks):
-    """
-    Hit this endpoint via cronjob to auto-recover any crashed or failed reports.
-    It scans the sheet, and if it finds a FAILED task, or a QUEUED task older than 20 mins, it retries it.
-    """
     try:
         client = get_gspread_client()
         sheet = client.open_by_key(os.environ.get("GOOGLE_SHEET_ID")).worksheet("PaidReports")
