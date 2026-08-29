@@ -90,12 +90,11 @@ async def get_chart_data(name, year, month, day, hour, minute, city, nation, bum
     location = await get_coordinates(city, nation)
     tz_str = await asyncio.to_thread(tf.timezone_at, lng=location.longitude, lat=location.latitude)
     
-    # CRITICAL FIX: houses_system="W" ensures Whole Sign matching the Free Engine
-    subject = await asyncio.to_thread(AstrologicalSubject, name, year, month, day, hour, minute, lng=location.longitude, lat=location.latitude, tz_str=tz_str, city=city, houses_system="W")
+    subject = await asyncio.to_thread(AstrologicalSubject, name, year, month, day, hour, minute, lng=location.longitude, lat=location.latitude, tz_str=tz_str, city=city)
     
     dt = datetime.datetime(year, month, day, hour, minute)
     dt_future = dt + datetime.timedelta(hours=1)
-    subject_future = await asyncio.to_thread(AstrologicalSubject, name + "_future", dt_future.year, dt_future.month, dt_future.day, dt_future.hour, dt_future.minute, lng=location.longitude, lat=location.latitude, tz_str=tz_str, city=city, houses_system="W")
+    subject_future = await asyncio.to_thread(AstrologicalSubject, name + "_future", dt_future.year, dt_future.month, dt_future.day, dt_future.hour, dt_future.minute, lng=location.longitude, lat=location.latitude, tz_str=tz_str, city=city)
 
     now_utc = datetime.datetime.utcnow()
     subject_transit = await asyncio.to_thread(AstrologicalSubject, "Transit", now_utc.year, now_utc.month, now_utc.day, now_utc.hour, now_utc.minute, lng=0.0, lat=51.5, tz_str="UTC", city="London")
@@ -108,7 +107,6 @@ async def get_chart_data(name, year, month, day, hour, minute, city, nation, bum
             m = 0
         return f"{d}°{m:02d}’"
 
-    # CRITICAL FIX: Day/Night Sect and Lot of Spirit calculation matching Free Engine
     def get_sect_and_lots(subj):
         asc_obj = getattr(subj, "first_house", None)
         sun_obj = getattr(subj, "sun", None)
@@ -211,7 +209,6 @@ async def get_chart_data(name, year, month, day, hour, minute, city, nation, bum
             fmt = format_pos(d_name, obj)
             if fmt: lines.append(fmt)
 
-    # Inject custom Lot of Spirit and Sect
     if lot_of_spirit:
         lines.append(f"Lot of Spirit in {lot_of_spirit['sign']} {deg_to_d_m(lot_of_spirit['position'])}, in {lot_of_spirit['house']} House")
     if sect:
@@ -242,6 +239,11 @@ async def get_chart_data(name, year, month, day, hour, minute, city, nation, bum
         if not obj: return None
         return getattr(obj, "abs_pos", 0) if not isinstance(obj, dict) else obj.get("abs_pos", 0)
 
+    h1 = get_obj(subject, "first_house")
+    dsc_abs = (get_abs_pos(h1) + 180) % 360 if h1 else None
+    h10 = get_obj(subject, "tenth_house")
+    ic_abs = (get_abs_pos(h10) + 180) % 360 if h10 else None
+
     entities = []
     for d_name, a_name in points + angles:
         obj = get_obj(subject, a_name)
@@ -253,11 +255,6 @@ async def get_chart_data(name, year, month, day, hour, minute, city, nation, bum
                 "abs_pos_f": get_abs_pos(obj_f),
                 "is_luminary": d_name in ["Sun", "Moon"]
             })
-
-    h1 = get_obj(subject, "first_house")
-    dsc_abs = (get_abs_pos(h1) + 180) % 360 if h1 else None
-    h10 = get_obj(subject, "tenth_house")
-    ic_abs = (get_abs_pos(h10) + 180) % 360 if h10 else None
 
     if dsc_abs is not None:
         h1_f = get_obj(subject_future, "first_house")
