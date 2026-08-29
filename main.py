@@ -90,11 +90,12 @@ async def get_chart_data(name, year, month, day, hour, minute, city, nation, bum
     location = await get_coordinates(city, nation)
     tz_str = await asyncio.to_thread(tf.timezone_at, lng=location.longitude, lat=location.latitude)
     
-    subject = await asyncio.to_thread(AstrologicalSubject, name, year, month, day, hour, minute, lng=location.longitude, lat=location.latitude, tz_str=tz_str, city=city)
+    # CRITICAL FIX: houses_system="W" ensures Whole Sign matching the Free Engine
+    subject = await asyncio.to_thread(AstrologicalSubject, name, year, month, day, hour, minute, lng=location.longitude, lat=location.latitude, tz_str=tz_str, city=city, houses_system="W")
     
     dt = datetime.datetime(year, month, day, hour, minute)
     dt_future = dt + datetime.timedelta(hours=1)
-    subject_future = await asyncio.to_thread(AstrologicalSubject, name + "_future", dt_future.year, dt_future.month, dt_future.day, dt_future.hour, dt_future.minute, lng=location.longitude, lat=location.latitude, tz_str=tz_str, city=city)
+    subject_future = await asyncio.to_thread(AstrologicalSubject, name + "_future", dt_future.year, dt_future.month, dt_future.day, dt_future.hour, dt_future.minute, lng=location.longitude, lat=location.latitude, tz_str=tz_str, city=city, houses_system="W")
 
     now_utc = datetime.datetime.utcnow()
     subject_transit = await asyncio.to_thread(AstrologicalSubject, "Transit", now_utc.year, now_utc.month, now_utc.day, now_utc.hour, now_utc.minute, lng=0.0, lat=51.5, tz_str="UTC", city="London")
@@ -107,25 +108,45 @@ async def get_chart_data(name, year, month, day, hour, minute, city, nation, bum
             m = 0
         return f"{d}°{m:02d}’"
 
+    # CRITICAL FIX: Day/Night Sect and Lot of Spirit calculation matching Free Engine
+    def get_sect_and_lots(subj):
+        asc_obj = getattr(subj, "first_house", None)
+        sun_obj = getattr(subj, "sun", None)
+        moon_obj = getattr(subj, "moon", None)
+
+        if not (asc_obj and sun_obj and moon_obj):
+            return None, None, None
+
+        asc_abs = getattr(asc_obj, "abs_pos", 0) if not isinstance(asc_obj, dict) else asc_obj.get("abs_pos", 0)
+        sun_abs = getattr(sun_obj, "abs_pos", 0) if not isinstance(sun_obj, dict) else sun_obj.get("abs_pos", 0)
+        moon_abs = getattr(moon_obj, "abs_pos", 0) if not isinstance(moon_obj, dict) else moon_obj.get("abs_pos", 0)
+
+        sun_h = getattr(sun_obj, "house", "") if not isinstance(sun_obj, dict) else sun_obj.get("house", "")
+        is_day_chart = any(x in str(sun_h) for x in ["7", "8", "9", "10", "11", "12", "Seventh", "Eighth", "Ninth", "Tenth", "Eleventh", "Twelfth"])
+        sect = "Day" if is_day_chart else "Night"
+
+        if is_day_chart:
+            fortune_abs = (asc_abs + moon_abs - sun_abs) % 360
+            spirit_abs = (asc_abs + sun_abs - moon_abs) % 360
+        else:
+            fortune_abs = (asc_abs + sun_abs - moon_abs) % 360
+            spirit_abs = (asc_abs + moon_abs - sun_abs) % 360
+
+        signs = ["Aries", "Taurus", "Gemini", "Cancer", "Leo", "Virgo", "Libra", "Scorpio", "Sagittarius", "Capricorn", "Aquarius", "Pisces"]
+
+        fortune = {"sign": signs[int(fortune_abs // 30)], "position": fortune_abs % 30, "abs_pos": fortune_abs, "house": str(int(fortune_abs // 30) + 1)}
+        spirit = {"sign": signs[int(spirit_abs // 30)], "position": spirit_abs % 30, "abs_pos": spirit_abs, "house": str(int(spirit_abs // 30) + 1)}
+
+        return sect, fortune, spirit
+
+    sect, lot_of_fortune, lot_of_spirit = get_sect_and_lots(subject)
+
     def get_obj(subj, attr):
         obj = getattr(subj, attr, None)
         if not obj and attr == "part_of_fortune":
-            obj = getattr(subj, "pars_fortuna", None)
+            return lot_of_fortune
         if not obj and attr == "true_node":
             obj = getattr(subj, "mean_node", None)
-        if not obj and attr == "part_of_fortune":
-            asc_obj = getattr(subj, "first_house", None)
-            sun_obj = getattr(subj, "sun", None)
-            moon_obj = getattr(subj, "moon", None)
-            if asc_obj and sun_obj and moon_obj:
-                asc_abs = getattr(asc_obj, "abs_pos", 0) if not isinstance(asc_obj, dict) else asc_obj.get("abs_pos", 0)
-                sun_abs = getattr(sun_obj, "abs_pos", 0) if not isinstance(sun_obj, dict) else sun_obj.get("abs_pos", 0)
-                moon_abs = getattr(moon_obj, "abs_pos", 0) if not isinstance(moon_obj, dict) else moon_obj.get("abs_pos", 0)
-                sun_h = getattr(sun_obj, "house", "") if not isinstance(sun_obj, dict) else sun_obj.get("house", "")
-                is_day = any(x in sun_h for x in ["7", "8", "9", "10", "11", "12", "Seventh", "Eighth", "Ninth", "Tenth", "Eleventh", "Twelfth"])
-                f_abs = (asc_abs + moon_abs - sun_abs) % 360 if is_day else (asc_abs + sun_abs - moon_abs) % 360
-                signs = ["Aries", "Taurus", "Gemini", "Cancer", "Leo", "Virgo", "Libra", "Scorpio", "Sagittarius", "Capricorn", "Aquarius", "Pisces"]
-                return {"sign": signs[int(f_abs / 30)], "position": f_abs % 30, "abs_pos": f_abs}
         if not obj and attr == "vertex":
             v_abs = None
             if hasattr(subj, "_ascmc") and subj._ascmc and len(subj._ascmc) > 3:
@@ -190,7 +211,12 @@ async def get_chart_data(name, year, month, day, hour, minute, city, nation, bum
             fmt = format_pos(d_name, obj)
             if fmt: lines.append(fmt)
 
-    # ADDED: Ascendant, MC, and House Cusps so the AI stops hallucinating them
+    # Inject custom Lot of Spirit and Sect
+    if lot_of_spirit:
+        lines.append(f"Lot of Spirit in {lot_of_spirit['sign']} {deg_to_d_m(lot_of_spirit['position'])}, in {lot_of_spirit['house']} House")
+    if sect:
+        lines.append(f"Chart Sect: {sect} Chart")
+
     angles = [("ASC", "first_house"), ("MC", "tenth_house")]
     for d_name, a_name in angles:
         obj = get_obj(subject, a_name)
@@ -216,7 +242,6 @@ async def get_chart_data(name, year, month, day, hour, minute, city, nation, bum
         if not obj: return None
         return getattr(obj, "abs_pos", 0) if not isinstance(obj, dict) else obj.get("abs_pos", 0)
 
-    # ADDED: Natal Aspect Calculation (T-Squares, Trines, etc.)
     entities = []
     for d_name, a_name in points + angles:
         obj = get_obj(subject, a_name)
@@ -228,6 +253,21 @@ async def get_chart_data(name, year, month, day, hour, minute, city, nation, bum
                 "abs_pos_f": get_abs_pos(obj_f),
                 "is_luminary": d_name in ["Sun", "Moon"]
             })
+
+    h1 = get_obj(subject, "first_house")
+    dsc_abs = (get_abs_pos(h1) + 180) % 360 if h1 else None
+    h10 = get_obj(subject, "tenth_house")
+    ic_abs = (get_abs_pos(h10) + 180) % 360 if h10 else None
+
+    if dsc_abs is not None:
+        h1_f = get_obj(subject_future, "first_house")
+        dsc_abs_f = (get_abs_pos(h1_f) + 180) % 360 if h1_f else dsc_abs
+        entities.append({"name": "DSC", "abs_pos": dsc_abs, "abs_pos_f": dsc_abs_f, "is_luminary": False})
+
+    if ic_abs is not None:
+        h10_f = get_obj(subject_future, "tenth_house")
+        ic_abs_f = (get_abs_pos(h10_f) + 180) % 360 if h10_f else ic_abs
+        entities.append({"name": "IC", "abs_pos": ic_abs, "abs_pos_f": ic_abs_f, "is_luminary": False})
 
     def get_diff(p1, p2):
         d = abs(p1 - p2)
@@ -273,7 +313,12 @@ async def get_chart_data(name, year, month, day, hour, minute, city, nation, bum
             future_subj = await asyncio.to_thread(AstrologicalSubject, f"T_{i}", target_year, target_month, 1, 12, 0, lng=0.0, lat=51.5, tz_str="UTC", city="London")
             
             slow_points = [("Mars", "mars"), ("Jupiter", "jupiter"), ("Saturn", "saturn"), ("Uranus", "uranus"), ("Neptune", "neptune"), ("Pluto", "pluto"), ("North Node", "true_node")]
-            future_ents = [{"name": n, "abs_pos": get_abs_pos(future_subj, a)} for n, a in slow_points if getattr(future_subj, a, None)]
+            
+            future_ents = []
+            for n, a in slow_points:
+                obj = get_obj(future_subj, a)
+                if obj:
+                    future_ents.append({"name": n, "abs_pos": get_abs_pos(obj)})
             
             month_has_transits = False
             for f_ent in future_ents:
