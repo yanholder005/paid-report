@@ -285,7 +285,31 @@ async def get_chart_data(name, year, month, day, hour, minute, city, nation):
 
     lines.extend(aspects_lines)
 
-    # NO MORE 'IF BUMP' HERE - WE ALWAYS CALCULATE THE 6-MONTH DATA
+    # --- ADDED: CURRENT ACTIVE TRANSITS (TODAY) ---
+    lines.append("\n=== CURRENT ACTIVE TRANSITS (TODAY) ===")
+    slow_points = [("Mars", "mars"), ("Jupiter", "jupiter"), ("Saturn", "saturn"), ("Uranus", "uranus"), ("Neptune", "neptune"), ("Pluto", "pluto"), ("North Node", "true_node")]
+    current_transit_ents = []
+    
+    for n, a in slow_points:
+        obj = get_obj(subject_transit, a)
+        if obj:
+            current_transit_ents.append({"name": n, "abs_pos": get_abs_pos(obj)})
+            
+    today_has_transits = False
+    for t_ent in current_transit_ents:
+        for n_ent in entities:
+            diff = abs(t_ent["abs_pos"] - n_ent["abs_pos"])
+            diff = min(diff, 360 - diff)
+            max_orb = 2 
+            for asp_name, asp_angle in [("Conjunction", 0), ("Square", 90), ("Opposition", 180)]:
+                if abs(diff - asp_angle) <= max_orb:
+                    lines.append(f"Transit {t_ent['name']} {asp_name} Natal {n_ent['name']}")
+                    today_has_transits = True
+                    
+    if not today_has_transits:
+        lines.append("No exact hard outer-planet transits are currently active today.")
+
+    # --- 6-MONTH TRANSIT FORECAST DATA ---
     lines.append("\n=== 6-MONTH TRANSIT FORECAST DATA ===")
     for i in range(1, 7):
         m_math = now_utc.month - 1 + i
@@ -297,8 +321,6 @@ async def get_chart_data(name, year, month, day, hour, minute, city, nation):
         lines.append(f"\n--- {month_name} ---")
         
         future_subj = await asyncio.to_thread(AstrologicalSubject, f"T_{i}", target_year, target_month, 1, 12, 0, lng=0.0, lat=51.5, tz_str="UTC", city="London", online=False)
-        
-        slow_points = [("Mars", "mars"), ("Jupiter", "jupiter"), ("Saturn", "saturn"), ("Uranus", "uranus"), ("Neptune", "neptune"), ("Pluto", "pluto"), ("North Node", "true_node")]
         
         future_ents = []
         for n, a in slow_points:
@@ -342,13 +364,11 @@ async def process_paid_report(data: PaidReportRequest, skip_delay=False):
         suffix = suffixes.get(prof_num if prof_num < 20 else prof_num % 10, 'th')
         profection_house = f"{prof_num}{suffix} House"
 
-        # ALWAYS calculate the 6-month forecast data
         chart_data = await get_chart_data(data.name, year, month, day, hour, minute, data.city, data.nation)
 
         client = await asyncio.to_thread(get_gspread_client)
         settings = client.open_by_key(os.environ.get("GOOGLE_SHEET_ID")).worksheet("Settings")
         
-        # B1 is now ALWAYS the main report prompt
         master_prompt = settings.acell('B1').value 
         if data.bump:
             summary_prompt = settings.acell('B2').value 
@@ -408,14 +428,9 @@ async def process_paid_report(data: PaidReportRequest, skip_delay=False):
                     if attempt == 2: raise Exception(f"Gemini API Error (Summary): {e}")
                     await asyncio.sleep(5)
 
-        # Build PDF
-        if data.bump:
-            # We convert the summary to HTML, inject a page break, and append the main report HTML
-            html_content = markdown.markdown(summary_markdown) + "<div style='page-break-after: always;'></div>" + markdown.markdown(report_markdown)
-        else:
-            html_content = markdown.markdown(report_markdown)
-
-        pdf_html = f"""
+        # Build Main PDF
+        main_html_content = markdown.markdown(report_markdown)
+        main_pdf_html = f"""
         <html>
         <head>
             <style>
@@ -451,30 +466,87 @@ async def process_paid_report(data: PaidReportRequest, skip_delay=False):
                     <div class="header-title">{data.name}'s Astrological<br>Blueprint</div>
                     <div class="header-sub">BORN: {formatted_dob} {data.time} • {data.city}</div>
                 </div>
-                {html_content}
+                {main_html_content}
             </div>
         </body>
         </html>
         """
         
+        # Build Summary PDF (If Bump is True)
+        if data.bump:
+            summary_html_content = markdown.markdown(summary_markdown)
+            summary_pdf_html = f"""
+            <html>
+            <head>
+                <style>
+                    @import url('https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,600;12..96,700&family=Figtree:wght@400;600&display=swap');
+                    
+                    html, body {{ margin: 0; padding: 0; background-color: #FDFBF7; }}
+                    @page {{ size: A4; margin: 2.5cm 2.2cm; background-color: #FDFBF7; @bottom-center {{ content: none; }} }}
+                    
+                    body {{ font-family: 'Figtree', sans-serif; color: #111; font-size: 14.5px; line-height: 1.8; }}
+                    .content-page {{ counter-reset: page 1; }}
+                    
+                    h1, h2, h3 {{ font-family: 'Bricolage Grotesque', sans-serif; color: #000; margin-top: 35px; margin-bottom: 15px; }}
+                    h2 {{ font-size: 22px; border-bottom: 1px solid #ddd; padding-bottom: 5px; }}
+                    h3 {{ font-size: 18px; }}
+                    p {{ margin-bottom: 16px; text-align: justify; }}
+                    strong {{ font-weight: 700; color: #000; }}
+                    
+                    .header-box {{ text-align: left; margin-bottom: 40px; padding-bottom: 20px; border-bottom: 2px dashed #ccc; }}
+                    .header-title {{ font-family: 'Bricolage Grotesque', sans-serif; font-size: 32px; font-weight: 700; line-height: 1.2; margin-bottom: 8px; }}
+                    .header-sub {{ font-size: 13px; font-weight: 600; color: #555; text-transform: uppercase; letter-spacing: 1.5px; }}
+                </style>
+            </head>
+            <body>
+                <div class="content-page">
+                    <div class="header-box">
+                        <div class="header-title">1-Page Executive<br>Summary</div>
+                        <div class="header-sub">PREPARED FOR: {data.name.upper()}</div>
+                    </div>
+                    {summary_html_content}
+                </div>
+            </body>
+            </html>
+            """
+        
         # MICRO-RETRY LOOP: PDF Build & Email Send
         resend.api_key = os.environ.get("RESEND_API_KEY")
         for attempt in range(3):
             try:
-                pdf_file = HTML(string=pdf_html).write_pdf()
-                email_body = f"""
-                <p>Hi {data.name},</p>
-                <p>Your complete astrological blueprint has been compiled, formatted, and secured.</p>
-                <p>Attached to this email is your final PDF report. It contains the exact architecture of your chart, the specific blocks currently running in your subconscious, and the concrete direction required to clear them.</p>
-                <p>Take your time with this. It is a lot of information.</p>
-                <p>Best,<br>Yan</p>
-                """
+                main_pdf_file = HTML(string=main_pdf_html).write_pdf()
+                attachments = [{"filename": f"{data.name}_Blueprint.pdf", "content": list(main_pdf_file)}]
+                
+                if data.bump:
+                    summary_pdf_file = HTML(string=summary_pdf_html).write_pdf()
+                    attachments.append({"filename": f"{data.name}_Executive_Summary.pdf", "content": list(summary_pdf_file)})
+                    
+                    email_body = f"""
+                    <p>Hi {data.name},</p>
+                    <p>Your complete astrological blueprint has been compiled, formatted, and secured.</p>
+                    <p>Attached to this email are your <strong>two files</strong>:</p>
+                    <ol>
+                        <li><strong>Your 15-Page Astrological Blueprint:</strong> This contains the deep architecture of your chart and the exact blocks currently running in your subconscious.</li>
+                        <li><strong>Your 1-Page Executive Summary:</strong> This is your high-density tactical cheat sheet. Keep it accessible as a daily operational manual.</li>
+                    </ol>
+                    <p>Take your time with this. It is a lot of information.</p>
+                    <p>Best,<br>Yan</p>
+                    """
+                else:
+                    email_body = f"""
+                    <p>Hi {data.name},</p>
+                    <p>Your complete astrological blueprint has been compiled, formatted, and secured.</p>
+                    <p>Attached to this email is your final PDF report. It contains the exact architecture of your chart, the specific blocks currently running in your subconscious, and the concrete direction required to clear them.</p>
+                    <p>Take your time with this. It is a lot of information.</p>
+                    <p>Best,<br>Yan</p>
+                    """
+
                 resend.Emails.send({
                     "from": "Yan Holder <yan@yanholder.com>",
                     "to": [data.email],
                     "subject": f"{data.name}, Your Complete Astrological Blueprint is Ready",
                     "html": email_body,
-                    "attachments": [{"filename": f"{data.name}_Blueprint.pdf", "content": list(pdf_file)}]
+                    "attachments": attachments
                 })
                 break
             except Exception as e:
