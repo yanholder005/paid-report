@@ -322,6 +322,14 @@ async def get_chart_data(name, year, month, day, hour, minute, city, nation):
 
     # --- 6-MONTH TRANSIT FORECAST DATA ---
     lines.append("\n=== 6-MONTH TRANSIT FORECAST DATA ===")
+    
+    # Calculate the upcoming profection year for the tripwire
+    current_age = now_utc.year - year - ((now_utc.month, now_utc.day) < (month, day))
+    next_prof_num = ((current_age + 1) % 12) + 1
+    suffixes_dict = {1: 'st', 2: 'nd', 3: 'rd'}
+    next_suffix = suffixes_dict.get(next_prof_num if next_prof_num < 20 else next_prof_num % 10, 'th')
+    next_profection_house = f"{next_prof_num}{next_suffix} House"
+
     for i in range(1, 7):
         m_math = now_utc.month - 1 + i
         target_year = now_utc.year + (m_math // 12)
@@ -331,6 +339,10 @@ async def get_chart_data(name, year, month, day, hour, minute, city, nation):
         
         lines.append(f"\n--- {month_name} ---")
         
+        # THE BIRTHDAY TRIPWIRE: If this forecast month is their birth month, warn the AI
+        if target_month == month:
+            lines.append(f"-> ⚠️ BIRTHDAY MONTH: The user's Profection Year officially shifts to the {next_profection_house} this month. You MUST change the Time Lord theme.")
+            
         future_subj = await asyncio.to_thread(AstrologicalSubject, f"T_{i}", target_year, target_month, 1, 12, 0, lng=0.0, lat=51.5, tz_str="UTC", city="London", online=False)
         
         future_ents = []
