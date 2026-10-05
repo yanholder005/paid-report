@@ -63,13 +63,24 @@ def send_admin_alert(msg, email, status_msg=""):
     except:
         pass
 
-def update_request_status(email, new_status):
+def update_request_status(email, new_status, timestamp_str=None):
     try:
         client = get_gspread_client()
         sheet = client.open_by_key(os.environ.get("GOOGLE_SHEET_ID")).worksheet("PaidReports")
-        emails = sheet.col_values(2)
+        records = sheet.get_all_values()
         
-        row_index = len(emails) - emails[::-1].index(email) 
+        row_index = -1
+        # Target the exact row using the timestamp to prevent testing overlap
+        if timestamp_str:
+            for i, row in enumerate(records):
+                if len(row) > 7 and row[1] == email and row[7] == timestamp_str:
+                    row_index = i + 1
+                    break
+                    
+        # Fallback to bottom-up search if no timestamp was provided
+        if row_index == -1:
+            emails = [r[1] if len(r) > 1 else "" for r in records]
+            row_index = len(emails) - emails[::-1].index(email) 
         
         def update(): sheet.update_cell(row_index, 9, new_status)
         exponential_backoff_retry(update)
@@ -285,7 +296,7 @@ async def get_chart_data(name, year, month, day, hour, minute, city, nation):
 
     lines.extend(aspects_lines)
 
-    # --- ADDED: CURRENT ACTIVE TRANSITS (TODAY) ---
+    # --- CURRENT ACTIVE TRANSITS (TODAY) ---
     lines.append("\n=== CURRENT ACTIVE TRANSITS (TODAY) ===")
     slow_points = [("Mars", "mars"), ("Jupiter", "jupiter"), ("Saturn", "saturn"), ("Uranus", "uranus"), ("Neptune", "neptune"), ("Pluto", "pluto"), ("North Node", "true_node")]
     current_transit_ents = []
@@ -345,12 +356,12 @@ async def get_chart_data(name, year, month, day, hour, minute, city, nation):
     return "\n".join(lines)
 
 
-async def process_paid_report(data: PaidReportRequest, skip_delay=False):
+async def process_paid_report(data: PaidReportRequest, skip_delay=False, timestamp_str=None):
     if not skip_delay:
         await asyncio.sleep(900)
 
     try:
-        await asyncio.to_thread(update_request_status, data.email, "PROCESSING")
+        await asyncio.to_thread(update_request_status, data.email, "PROCESSING", timestamp_str)
 
         year, month, day = map(int, data.date.split("-"))
         hour, minute = map(int, data.time.split(":"))
@@ -501,7 +512,7 @@ async def process_paid_report(data: PaidReportRequest, skip_delay=False):
             <body>
                 <div class="content-page">
                     <div class="header-box">
-                        <div class="header-title">1-Page Executive<br>Summary</div>
+                        <div class="header-title">Executive<br>Summary</div>
                         <div class="header-sub">PREPARED FOR: {data.name.upper()}</div>
                     </div>
                     {summary_html_content}
@@ -527,7 +538,7 @@ async def process_paid_report(data: PaidReportRequest, skip_delay=False):
                     <p>Attached to this email are your <strong>two files</strong>:</p>
                     <ol>
                         <li><strong>Your 15-Page Astrological Blueprint:</strong> This contains the deep architecture of your chart and the exact blocks currently running in your subconscious.</li>
-                        <li><strong>Your 1-Page Executive Summary:</strong> This is your high-density tactical cheat sheet. Keep it accessible as a daily operational manual.</li>
+                        <li><strong>Your Executive Summary:</strong> This is your high-density tactical cheat sheet. Keep it accessible as a daily operational manual.</li>
                     </ol>
                     <p>Take your time with this. It is a lot of information.</p>
                     <p>Best,<br>Yan</p>
@@ -553,11 +564,11 @@ async def process_paid_report(data: PaidReportRequest, skip_delay=False):
                 if attempt == 2: raise Exception(f"PDF/Email Error: {e}")
                 await asyncio.sleep(5)
 
-        await asyncio.to_thread(update_request_status, data.email, "DELIVERED")
+        await asyncio.to_thread(update_request_status, data.email, "DELIVERED", timestamp_str)
 
     except Exception as e:
         print(f"Process Error: {e}")
-        await asyncio.to_thread(update_request_status, data.email, f"FAILED: {str(e)[:40]}")
+        await asyncio.to_thread(update_request_status, data.email, f"FAILED: {str(e)[:40]}", timestamp_str)
         send_admin_alert(str(e), data.email, "Marked as FAILED in sheet.")
 
 
@@ -566,14 +577,16 @@ async def generate_paid(data: PaidReportRequest, bg_tasks: BackgroundTasks):
     try:
         client = get_gspread_client()
         paid_sheet = client.open_by_key(os.environ.get("GOOGLE_SHEET_ID")).worksheet("PaidReports")
-        row = [data.name, data.email, data.date, data.time, f"{data.city}, {data.nation}", data.question, "Yes" if data.bump else "No", datetime.datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"), "QUEUED"]
+        timestamp_str = datetime.datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
+        row = [data.name, data.email, data.date, data.time, f"{data.city}, {data.nation}", data.question, "Yes" if data.bump else "No", timestamp_str, "QUEUED"]
         
         def append(): paid_sheet.append_row(row)
         exponential_backoff_retry(append)
     except Exception as e:
         print(f"Failed to log initial request: {e}")
+        timestamp_str = None
     
-    bg_tasks.add_task(process_paid_report, data)
+    bg_tasks.add_task(process_paid_report, data, False, timestamp_str)
     return {"success": True}
 
 @app.get("/process-queue")
@@ -611,7 +624,7 @@ async def process_queue(bg_tasks: BackgroundTasks):
                 )
                 
                 sheet.update_cell(i + 1, 9, "RETRYING")
-                bg_tasks.add_task(process_paid_report, data, skip_delay=True)
+                bg_tasks.add_task(process_paid_report, data, True, timestamp_str)
                 recovered_count += 1
                 
         return {"status": f"Triggered recovery for {recovered_count} records."}
