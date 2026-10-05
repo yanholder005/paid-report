@@ -341,7 +341,7 @@ async def get_chart_data(name, year, month, day, hour, minute, city, nation):
         
         # THE BIRTHDAY TRIPWIRE: If this forecast month is their birth month, warn the AI
         if target_month == month:
-            lines.append(f"-> ⚠️ BIRTHDAY MONTH: The user's Profection Year officially shifts to the {next_profection_house} this month. You MUST change the Time Lord theme.")
+            lines.append(f"\n[SYSTEM INSTRUCTION FOR AI: BIRTHDAY MONTH DETECTED. The user's Profection Year officially shifts to the {next_profection_house} this month. Acknowledge this shift naturally, but DO NOT print this bracketed instruction.]\n")
             
         future_subj = await asyncio.to_thread(AstrologicalSubject, f"T_{i}", target_year, target_month, 1, 12, 0, lng=0.0, lat=51.5, tz_str="UTC", city="London", online=False)
         
