@@ -86,11 +86,10 @@ async def get_coordinates(city, nation):
             await asyncio.sleep(1) 
     raise Exception(f"Could not locate '{loc_query}'.")
 
-async def get_chart_data(name, year, month, day, hour, minute, city, nation, bump=False):
+async def get_chart_data(name, year, month, day, hour, minute, city, nation):
     location = await get_coordinates(city, nation)
     tz_str = await asyncio.to_thread(tf.timezone_at, lng=location.longitude, lat=location.latitude)
     
-    # FIX: online=False prevents Geonames lag
     subject = await asyncio.to_thread(AstrologicalSubject, name, year, month, day, hour, minute, lng=location.longitude, lat=location.latitude, tz_str=tz_str, city=city, online=False)
     
     dt = datetime.datetime(year, month, day, hour, minute)
@@ -112,14 +111,11 @@ async def get_chart_data(name, year, month, day, hour, minute, city, nation, bum
         asc_obj = getattr(subj, "first_house", None)
         sun_obj = getattr(subj, "sun", None)
         moon_obj = getattr(subj, "moon", None)
-
         if not (asc_obj and sun_obj and moon_obj):
             return None, None, None
-
         asc_abs = getattr(asc_obj, "abs_pos", 0) if not isinstance(asc_obj, dict) else asc_obj.get("abs_pos", 0)
         sun_abs = getattr(sun_obj, "abs_pos", 0) if not isinstance(sun_obj, dict) else sun_obj.get("abs_pos", 0)
         moon_abs = getattr(moon_obj, "abs_pos", 0) if not isinstance(moon_obj, dict) else moon_obj.get("abs_pos", 0)
-
         sun_h = getattr(sun_obj, "house", "") if not isinstance(sun_obj, dict) else sun_obj.get("house", "")
         is_day_chart = any(x in str(sun_h) for x in ["7", "8", "9", "10", "11", "12", "Seventh", "Eighth", "Ninth", "Tenth", "Eleventh", "Twelfth"])
         sect = "Day" if is_day_chart else "Night"
@@ -132,26 +128,20 @@ async def get_chart_data(name, year, month, day, hour, minute, city, nation, bum
             spirit_abs = (asc_abs + moon_abs - sun_abs) % 360
 
         signs = ["Aries", "Taurus", "Gemini", "Cancer", "Leo", "Virgo", "Libra", "Scorpio", "Sagittarius", "Capricorn", "Aquarius", "Pisces"]
-
         fortune = {"sign": signs[int(fortune_abs // 30)], "position": fortune_abs % 30, "abs_pos": fortune_abs, "house": str(int(fortune_abs // 30) + 1)}
         spirit = {"sign": signs[int(spirit_abs // 30)], "position": spirit_abs % 30, "abs_pos": spirit_abs, "house": str(int(spirit_abs // 30) + 1)}
-
         return sect, fortune, spirit
 
     sect, lot_of_fortune, lot_of_spirit = get_sect_and_lots(subject)
 
     def get_obj(subj, attr):
         obj = getattr(subj, attr, None)
-        if not obj and attr == "part_of_fortune":
-            return lot_of_fortune
-        if not obj and attr == "true_node":
-            obj = getattr(subj, "mean_node", None)
+        if not obj and attr == "part_of_fortune": return lot_of_fortune
+        if not obj and attr == "true_node": obj = getattr(subj, "mean_node", None)
         if not obj and attr == "vertex":
             v_abs = None
-            if hasattr(subj, "_ascmc") and subj._ascmc and len(subj._ascmc) > 3:
-                v_abs = subj._ascmc[3]
-            elif hasattr(subj, "ascmc") and subj.ascmc and len(subj.ascmc) > 3:
-                v_abs = subj.ascmc[3]
+            if hasattr(subj, "_ascmc") and subj._ascmc and len(subj._ascmc) > 3: v_abs = subj._ascmc[3]
+            elif hasattr(subj, "ascmc") and subj.ascmc and len(subj.ascmc) > 3: v_abs = subj.ascmc[3]
             if v_abs is not None:
                 signs = ["Aries", "Taurus", "Gemini", "Cancer", "Leo", "Virgo", "Libra", "Scorpio", "Sagittarius", "Capricorn", "Aquarius", "Pisces"]
                 return {"sign": signs[int(v_abs / 30)], "position": v_abs % 30, "abs_pos": v_abs}
@@ -210,10 +200,8 @@ async def get_chart_data(name, year, month, day, hour, minute, city, nation, bum
             fmt = format_pos(d_name, obj)
             if fmt: lines.append(fmt)
 
-    if lot_of_spirit:
-        lines.append(f"Lot of Spirit in {lot_of_spirit['sign']} {deg_to_d_m(lot_of_spirit['position'])}, in {lot_of_spirit['house']} House")
-    if sect:
-        lines.append(f"Chart Sect: {sect} Chart")
+    if lot_of_spirit: lines.append(f"Lot of Spirit in {lot_of_spirit['sign']} {deg_to_d_m(lot_of_spirit['position'])}, in {lot_of_spirit['house']} House")
+    if sect: lines.append(f"Chart Sect: {sect} Chart")
 
     angles = [("ASC", "first_house"), ("MC", "tenth_house")]
     for d_name, a_name in angles:
@@ -297,40 +285,40 @@ async def get_chart_data(name, year, month, day, hour, minute, city, nation, bum
 
     lines.extend(aspects_lines)
 
-    if bump:
-        lines.append("\n=== 6-MONTH TRANSIT FORECAST DATA ===")
-        for i in range(1, 7):
-            m_math = now_utc.month - 1 + i
-            target_year = now_utc.year + (m_math // 12)
-            target_month = (m_math % 12) + 1
-            target_date = datetime.datetime(target_year, target_month, 1, 12, 0)
-            month_name = target_date.strftime('%B %Y')
-            
-            lines.append(f"\n--- {month_name} ---")
-            
-            future_subj = await asyncio.to_thread(AstrologicalSubject, f"T_{i}", target_year, target_month, 1, 12, 0, lng=0.0, lat=51.5, tz_str="UTC", city="London", online=False)
-            
-            slow_points = [("Mars", "mars"), ("Jupiter", "jupiter"), ("Saturn", "saturn"), ("Uranus", "uranus"), ("Neptune", "neptune"), ("Pluto", "pluto"), ("North Node", "true_node")]
-            
-            future_ents = []
-            for n, a in slow_points:
-                obj = get_obj(future_subj, a)
-                if obj:
-                    future_ents.append({"name": n, "abs_pos": get_abs_pos(obj)})
-            
-            month_has_transits = False
-            for f_ent in future_ents:
-                for n_ent in entities:
-                    diff = abs(f_ent["abs_pos"] - n_ent["abs_pos"])
-                    diff = min(diff, 360 - diff)
-                    max_orb = 2 
-                    for asp_name, asp_angle in [("Conjunction", 0), ("Square", 90), ("Opposition", 180)]:
-                        if abs(diff - asp_angle) <= max_orb:
-                            lines.append(f"Transit {f_ent['name']} {asp_name} Natal {n_ent['name']}")
-                            month_has_transits = True
-            
-            if not month_has_transits:
-                lines.append("No exact hard aspects forming this month. (Focus on ongoing macro transits).")
+    # NO MORE 'IF BUMP' HERE - WE ALWAYS CALCULATE THE 6-MONTH DATA
+    lines.append("\n=== 6-MONTH TRANSIT FORECAST DATA ===")
+    for i in range(1, 7):
+        m_math = now_utc.month - 1 + i
+        target_year = now_utc.year + (m_math // 12)
+        target_month = (m_math % 12) + 1
+        target_date = datetime.datetime(target_year, target_month, 1, 12, 0)
+        month_name = target_date.strftime('%B %Y')
+        
+        lines.append(f"\n--- {month_name} ---")
+        
+        future_subj = await asyncio.to_thread(AstrologicalSubject, f"T_{i}", target_year, target_month, 1, 12, 0, lng=0.0, lat=51.5, tz_str="UTC", city="London", online=False)
+        
+        slow_points = [("Mars", "mars"), ("Jupiter", "jupiter"), ("Saturn", "saturn"), ("Uranus", "uranus"), ("Neptune", "neptune"), ("Pluto", "pluto"), ("North Node", "true_node")]
+        
+        future_ents = []
+        for n, a in slow_points:
+            obj = get_obj(future_subj, a)
+            if obj:
+                future_ents.append({"name": n, "abs_pos": get_abs_pos(obj)})
+        
+        month_has_transits = False
+        for f_ent in future_ents:
+            for n_ent in entities:
+                diff = abs(f_ent["abs_pos"] - n_ent["abs_pos"])
+                diff = min(diff, 360 - diff)
+                max_orb = 2 
+                for asp_name, asp_angle in [("Conjunction", 0), ("Square", 90), ("Opposition", 180)]:
+                    if abs(diff - asp_angle) <= max_orb:
+                        lines.append(f"Transit {f_ent['name']} {asp_name} Natal {n_ent['name']}")
+                        month_has_transits = True
+        
+        if not month_has_transits:
+            lines.append("No exact hard aspects forming this month. (Focus on ongoing macro transits).")
 
     return "\n".join(lines)
 
@@ -354,12 +342,17 @@ async def process_paid_report(data: PaidReportRequest, skip_delay=False):
         suffix = suffixes.get(prof_num if prof_num < 20 else prof_num % 10, 'th')
         profection_house = f"{prof_num}{suffix} House"
 
-        chart_data = await get_chart_data(data.name, year, month, day, hour, minute, data.city, data.nation, data.bump)
+        # ALWAYS calculate the 6-month forecast data
+        chart_data = await get_chart_data(data.name, year, month, day, hour, minute, data.city, data.nation)
 
         client = await asyncio.to_thread(get_gspread_client)
         settings = client.open_by_key(os.environ.get("GOOGLE_SHEET_ID")).worksheet("Settings")
         
-        master_prompt = settings.acell('B2').value if data.bump else settings.acell('B1').value
+        # B1 is now ALWAYS the main report prompt
+        master_prompt = settings.acell('B1').value 
+        if data.bump:
+            summary_prompt = settings.acell('B2').value 
+            
         context_string = f"Deep Dive Context from User: {data.question}\n"
 
         try:
@@ -392,7 +385,7 @@ async def process_paid_report(data: PaidReportRequest, skip_delay=False):
         genai.configure(api_key=os.environ.get("GEMINI_API_KEY"))
         model = genai.GenerativeModel("gemini-3.1-pro-preview")
         
-        # MICRO-RETRY LOOP: API Generation
+        # MICRO-RETRY LOOP: API Generation (Main Report)
         report_markdown = ""
         for attempt in range(3):
             try:
@@ -403,8 +396,25 @@ async def process_paid_report(data: PaidReportRequest, skip_delay=False):
                 if attempt == 2: raise Exception(f"Gemini API Error: {e}")
                 await asyncio.sleep(5)
 
+        # MICRO-RETRY LOOP: API Generation (Executive Summary Bump)
+        if data.bump:
+            summary_markdown = ""
+            for attempt in range(3):
+                try:
+                    summary_resp = await model.generate_content_async(f"{summary_prompt}\n\n=== 15-PAGE REPORT CONTENT TO SUMMARIZE ===\n{report_markdown}")
+                    summary_markdown = summary_resp.text
+                    break
+                except Exception as e:
+                    if attempt == 2: raise Exception(f"Gemini API Error (Summary): {e}")
+                    await asyncio.sleep(5)
+
         # Build PDF
-        html_content = markdown.markdown(report_markdown)
+        if data.bump:
+            # We convert the summary to HTML, inject a page break, and append the main report HTML
+            html_content = markdown.markdown(summary_markdown) + "<div style='page-break-after: always;'></div>" + markdown.markdown(report_markdown)
+        else:
+            html_content = markdown.markdown(report_markdown)
+
         pdf_html = f"""
         <html>
         <head>
