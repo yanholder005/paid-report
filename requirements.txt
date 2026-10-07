@@ -7,7 +7,7 @@ geopy
 timezonefinder
 gspread==6.2.1
 google-auth
-google-generativeai==0.8.6
+google-genai
 resend==2.48.0
 markdown
 weasyprint==70.0
