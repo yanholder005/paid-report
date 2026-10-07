@@ -432,9 +432,9 @@ async def process_paid_report(data: PaidReportRequest, skip_delay=False, timesta
         # Merge prompts to emulate the old behavior
         full_report_input = f"{master_prompt}\n\n{user_prompt}"
         
-        # Set config to use "thinking_level" instead of deprecated parameters
+        # Set config to use "thinking_level" using the new structure
         config = types.GenerateContentConfig(
-            thinking_level="high",
+            thinking_config=types.ThinkingConfig(thinking_level="high")
         )
 
         # MICRO-RETRY LOOP: API Generation (Main Report)
