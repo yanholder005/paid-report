@@ -4,7 +4,8 @@ from pydantic import BaseModel
 from kerykeion import AstrologicalSubject
 from geopy.geocoders import ArcGIS
 from timezonefinder import TimezoneFinder
-import google.generativeai as genai
+from google import genai # <-- UPDATED IMPORT
+from google.genai import types # <-- ADDED FOR CONFIG
 import resend
 import gspread
 from google.oauth2.service_account import Credentials
@@ -339,7 +340,7 @@ async def get_chart_data(name, year, month, day, hour, minute, city, nation):
         
         lines.append(f"\n--- {month_name} ---")
         
-        # THE BIRTHDAY TRIPWIRE: If this forecast month is their birth month, warn the AI
+        # THE BIRTHDAY TRIPWIRE
         if target_month == month:
             lines.append(f"\n[SYSTEM INSTRUCTION FOR AI: BIRTHDAY MONTH DETECTED. The user's Profection Year officially shifts to the {next_profection_house} this month. Acknowledge this shift naturally, but DO NOT print this bracketed instruction.]\n")
             
@@ -389,8 +390,8 @@ async def process_paid_report(data: PaidReportRequest, skip_delay=False, timesta
 
         chart_data = await get_chart_data(data.name, year, month, day, hour, minute, data.city, data.nation)
 
-        client = await asyncio.to_thread(get_gspread_client)
-        settings = client.open_by_key(os.environ.get("GOOGLE_SHEET_ID")).worksheet("Settings")
+        client_gs = await asyncio.to_thread(get_gspread_client)
+        settings = client_gs.open_by_key(os.environ.get("GOOGLE_SHEET_ID")).worksheet("Settings")
         
         master_prompt = settings.acell('B1').value 
         if data.bump:
@@ -399,7 +400,7 @@ async def process_paid_report(data: PaidReportRequest, skip_delay=False, timesta
         context_string = f"Deep Dive Context from User: {data.question}\n"
 
         try:
-            free_sheet = client.open_by_key(os.environ.get("GOOGLE_SHEET_ID")).worksheet("Sheet1")
+            free_sheet = client_gs.open_by_key(os.environ.get("GOOGLE_SHEET_ID")).worksheet("Sheet1")
             all_values = free_sheet.get_all_values()
             
             past_record = None
@@ -425,14 +426,28 @@ async def process_paid_report(data: PaidReportRequest, skip_delay=False, timesta
 
         user_prompt = f"Current Date: {now_date.strftime('%B %d, %Y')}\nName: {data.name}\nDOB: {formatted_dob}\nTime: {data.time}\nLocation: {data.city}\nCurrent Age: {age}\nCurrent Profection Year: {profection_house}\n\n{context_string}\n\nCHART DATA:\n{chart_data}"
 
-        genai.configure(api_key=os.environ.get("GEMINI_API_KEY"))
-        model = genai.GenerativeModel("gemini-3.1-pro-preview")
+        # --- MIGRATED API CLIENT CREATION ---
+        client = genai.Client(api_key=os.environ.get("GEMINI_API_KEY"))
         
+        # Merge prompts to emulate the old behavior
+        full_report_input = f"{master_prompt}\n\n{user_prompt}"
+        
+        # Set config to use "thinking_level" instead of deprecated parameters
+        config = types.GenerateContentConfig(
+            thinking_level="high",
+        )
+
         # MICRO-RETRY LOOP: API Generation (Main Report)
         report_markdown = ""
         for attempt in range(3):
             try:
-                response = await model.generate_content_async(f"{master_prompt}\n\n{user_prompt}")
+                # --- MIGRATED GENERATE CALL ---
+                response = await asyncio.to_thread(
+                    client.models.generate_content,
+                    model="gemini-3.1-pro-preview", 
+                    contents=full_report_input,
+                    config=config
+                )
                 report_markdown = response.text
                 break
             except Exception as e:
@@ -442,9 +457,15 @@ async def process_paid_report(data: PaidReportRequest, skip_delay=False, timesta
         # MICRO-RETRY LOOP: API Generation (Executive Summary Bump)
         if data.bump:
             summary_markdown = ""
+            full_summary_input = f"{summary_prompt}\n\n=== 15-PAGE REPORT CONTENT TO SUMMARIZE ===\n{report_markdown}"
             for attempt in range(3):
                 try:
-                    summary_resp = await model.generate_content_async(f"{summary_prompt}\n\n=== 15-PAGE REPORT CONTENT TO SUMMARIZE ===\n{report_markdown}")
+                    summary_resp = await asyncio.to_thread(
+                        client.models.generate_content,
+                        model="gemini-3.1-pro-preview", 
+                        contents=full_summary_input,
+                        config=config
+                    )
                     summary_markdown = summary_resp.text
                     break
                 except Exception as e:
