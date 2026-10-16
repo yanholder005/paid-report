@@ -17,6 +17,13 @@ import random
 import datetime
 import markdown
 from weasyprint import HTML
+from dataclasses import dataclass
+import base64
+import hashlib
+import hmac
+import html
+import re
+from urllib.parse import urlencode, urlsplit
 
 app = FastAPI()
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
@@ -24,6 +31,78 @@ app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, 
 geolocator = ArcGIS(timeout=5)
 tf = TimezoneFinder()
 GSPREAD_CLIENT = None
+
+# --- SHARED MARKETING UNSUBSCRIBE LINKS ---
+# Use the SAME unsubscribe origin, key ring, and active key as the free service.
+# This service generates links only. The free service owns the one opt-out
+# endpoint and preference store; purchased fulfillment is never suppressed.
+class PreferenceError(Exception):
+    """Fail closed for marketing, without exposing tokens or secrets in logs."""
+
+def normalize_email(email):
+    value = email.strip().lower()
+    if not value or len(value) > 320 or value.count("@") != 1 or any(c.isspace() for c in value):
+        raise PreferenceError("Invalid recipient address")
+    return value
+
+def _mac(key, value):
+    return base64.urlsafe_b64encode(hmac.new(key.encode(), value.encode(), hashlib.sha256).digest()).rstrip(b"=").decode()
+
+@dataclass(frozen=True)
+class UnsubscribeConfig:
+    base_url: str
+    keys: dict
+    active_key_id: str
+
+    @classmethod
+    def from_values(cls, base_url, keys_json, active_key_id):
+        try:
+            parsed = urlsplit(base_url or "")
+            keys = json.loads(keys_json or "")
+        except (ValueError, TypeError):
+            raise PreferenceError("Unsubscribe configuration is incomplete") from None
+        if (parsed.scheme != "https" or not parsed.hostname or "." not in parsed.hostname
+                or parsed.username or parsed.password or parsed.port
+                or parsed.path not in ("", "/") or parsed.query or parsed.fragment):
+            raise PreferenceError("Unsubscribe base URL must be a fixed public HTTPS origin")
+        if (not isinstance(keys, dict) or not 1 <= len(keys) <= 5
+                or any(not isinstance(k, str) or not re.fullmatch(r"[A-Za-z0-9_-]{1,24}", k)
+                       or not isinstance(v, str) or len(v.encode()) < 32 for k, v in keys.items())
+                or active_key_id not in keys):
+            raise PreferenceError("Unsubscribe signing-key configuration is incomplete")
+        # Content-addressed IDs make accidental replacement under an existing ID
+        # invalid, rather than silently losing stored suppression matches.
+        if any(k != hashlib.sha256(v.encode()).hexdigest()[:24] for k, v in keys.items()):
+            raise PreferenceError("Each key ID must match its secret fingerprint")
+        return cls(base_url.rstrip("/"), keys, active_key_id)
+
+    def identity(self, email, key_id):
+        return _mac(self.keys[key_id], "marketing-subject:v1\0" + normalize_email(email))
+
+    def token(self, email):
+        key_id = self.active_key_id
+        unsigned = f"v1.{key_id}.{self.identity(email, key_id)}"
+        return unsigned + "." + _mac(self.keys[key_id], "marketing-unsubscribe:v1\0" + unsigned)
+
+
+    def url(self, email):
+        return self.base_url + "/unsubscribe?" + urlencode({"token": self.token(email)})
+
+def email_preferences(config, email):
+    url = config.url(email)
+    footer = ('\n<p style="font-family:Arial,sans-serif;font-size:12px;line-height:18px;'
+              'margin-top:32px;color:#666;">'
+              f'<a href="{html.escape(url, quote=True)}" style="color:#666;text-decoration:underline;">'
+              'Unsubscribe</a></p>')
+    headers = {"List-Unsubscribe": f"<{url}>", "List-Unsubscribe-Post": "List-Unsubscribe=One-Click"}
+    return footer, headers
+
+def get_unsubscribe_config():
+    return UnsubscribeConfig.from_values(
+        os.environ.get("UNSUBSCRIBE_BASE_URL"),
+        os.environ.get("UNSUBSCRIBE_KEYS_JSON"),
+        os.environ.get("UNSUBSCRIBE_ACTIVE_KEY_ID"),
+    )
 
 class PaidReportRequest(BaseModel):
     name: str
@@ -585,12 +664,21 @@ async def process_paid_report(data: PaidReportRequest, skip_delay=False, timesta
                     <p>Best,<br>Yan</p>
                     """
 
+                # A marketing opt-out must never block purchased fulfillment.
+                delivery_headers = {}
+                try:
+                    footer, delivery_headers = email_preferences(get_unsubscribe_config(), data.email)
+                    email_body += footer
+                except Exception:
+                    print("Paid report preferences unavailable; purchased delivery remains enabled.")
+
                 resend.Emails.send({
                     "from": "Yan Holder <yan@yanholder.com>",
                     "to": [data.email],
                     "subject": f"{data.name}, Your Complete Astrological Blueprint is Ready",
                     "html": email_body,
-                    "attachments": attachments
+                    "attachments": attachments,
+                    "headers": delivery_headers
                 })
                 break
             except Exception as e:
@@ -666,3 +754,4 @@ async def process_queue(bg_tasks: BackgroundTasks):
 
 @app.get("/")
 async def health_check(): return {"status": "paid engine active"}
+
